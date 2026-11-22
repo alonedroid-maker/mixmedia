@@ -37,10 +37,10 @@ class GitHubUpdateChecker(
     private val client: OkHttpClient = defaultClient(),
 ) {
     companion object {
-        const val REPO_URL = "https://github.com/alonedroid-maker/Fixlink-pro"
-        private const val LATEST_RELEASE_API = "https://api.github.com/repos/alonedroid-maker/Fixlink-pro/releases/latest"
-        private const val RELEASES_LIST_API = "https://api.github.com/repos/alonedroid-maker/Fixlink-pro/releases?per_page=1"
-        private const val TAGS_LIST_API = "https://api.github.com/repos/alonedroid-maker/Fixlink-pro/tags?per_page=1"
+        const val REPO_URL = "https://github.com/alonedroid-maker/mixmedia"
+        private const val LATEST_RELEASE_API = "https://api.github.com/repos/alonedroid-maker/mixmedia/releases/latest"
+        private const val RELEASES_LIST_API = "https://api.github.com/repos/alonedroid-maker/mixmedia/releases?per_page=1"
+        private const val TAGS_LIST_API = "https://api.github.com/repos/alonedroid-maker/mixmedia/tags?per_page=1"
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(12, TimeUnit.SECONDS)

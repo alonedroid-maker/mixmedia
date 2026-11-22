@@ -63,17 +63,19 @@ jobs:
           test -n "$APK"
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
           test -n "$APKSIGNER"
-          "$APKSIGNER" verify --verbose "$APK"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
           VERSION=$(grep -oE 'versionName\s*=\s*"[^"]+"' app/build.gradle.kts | head -n 1 | cut -d'"' -f2)
           VERSION=${VERSION:-1.1}
           mkdir -p release-output
-          cp "$APK" "release-output/MIxmedia-v${VERSION}-release.apk"
+          OUT_APK="release-output/MIxmedia-v${VERSION}-release.apk"
+          cp "$APK" "$OUT_APK"
+          sha256sum "$OUT_APK" > "${OUT_APK}.sha256"
 
       - name: Upload MIxmedia Signed APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: MIxmedia-Signed-Release
-          path: release-output/*.apk
+          path: release-output/*
           if-no-files-found: error
           retention-days: 30
 
@@ -81,5 +83,5 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: release-output/*.apk
+          files: release-output/*
           generate_release_notes: true

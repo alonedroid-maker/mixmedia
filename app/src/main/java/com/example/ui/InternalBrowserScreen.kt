@@ -340,12 +340,21 @@ fun InternalBrowserScreen(
                     settings.apply {
                         javaScriptEnabled = true
                         domStorageEnabled = true
+                        allowFileAccess = false
+                        allowContentAccess = false
+                        @Suppress("DEPRECATION")
+                        allowFileAccessFromFileURLs = false
+                        @Suppress("DEPRECATION")
+                        allowUniversalAccessFromFileURLs = false
                         setSupportZoom(true)
                         builtInZoomControls = true
                         displayZoomControls = false
                         loadWithOverviewMode = true
                         useWideViewPort = true
-                        mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                        mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                            safeBrowsingEnabled = true
+                        }
                     }
 
                     webChromeClient = object : WebChromeClient() {
