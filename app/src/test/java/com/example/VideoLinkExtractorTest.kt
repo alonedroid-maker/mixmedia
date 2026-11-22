@@ -1,0 +1,299 @@
+package com.example
+
+import com.example.download.DownloadStatus
+import com.example.download.DownloadTask
+import com.example.download.QueueConcurrency
+import com.example.network.CurlRedirectResolver
+import com.example.network.GitHubUpdateChecker
+import com.example.network.InstagramExtractor
+import com.example.network.MediaFormatCategory
+import com.example.network.VideoLinkExtractor
+import com.example.network.YouTubeExtractor
+import com.example.network.YouTubeStreamOption
+import com.example.ui.AppDestination
+import com.example.ui.AppLanguage
+import com.example.ui.DownloadFilter
+import com.example.ui.ExtractorUiState
+import com.example.ui.LinkExtractorViewModel
+import com.example.ui.filterDownloadTasks
+import com.example.ui.stringsFor
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class VideoLinkExtractorTest {
+
+    @Test
+    fun `default viewmodel state starts in English on resolver tab`() {
+        val vm = LinkExtractorViewModel()
+        assertEquals(AppLanguage.EN, vm.screenState.value.language)
+        assertEquals(AppDestination.RESOLVER, vm.screenState.value.destination)
+        assertFalse(vm.screenState.value.isVlcInterceptorEnabled)
+        assertFalse(vm.screenState.value.isDeveloperMode)
+    }
+
+    @Test
+    fun `extractInputUrl extracts url from curl command or vlc scheme or plain url`() {
+        val plain = "http://googfilmazappfordownfilmmedis.xyz/play-link/play.php?play-link/play.php?&t=serie&i=575432&m=09210076896&ap=Fj&s=vcp"
+        assertEquals(plain, VideoLinkExtractor.extractInputUrl(plain))
+
+        val cmd = """curl -L -v "$plain""""
+        assertEquals(plain, VideoLinkExtractor.extractInputUrl(cmd))
+
+        val vlcUrl = "vlc://$plain"
+        assertEquals(plain, VideoLinkExtractor.extractInputUrl(vlcUrl))
+
+        val doubleQuery =
+            "http://googfilmazappfordownfilmmedis.xyz/play-link/play.php?play-link/play.php?&t=movie&i=72648&m=09210076896&ap=Fj?&t=movie&i=72648&m=09210076896&s=vcp"
+        assertEquals(doubleQuery, VideoLinkExtractor.extractInputUrl(doubleQuery))
+        assertTrue(doubleQuery.toHttpUrlOrNull() != null)
+    }
+
+    @Test
+    fun `isVideoDownloadUrl and smart direct download detection handle video and non-video files`() {
+        assertTrue(
+            VideoLinkExtractor.isVideoDownloadUrl(
+                "http://dl10.tdmm2.ir/movies/sere/05/We.Are.All.Trying.Here/fasl1dub/We.Are.All.Trying.Here.E12.720p.NF.WEB-DL.Golchindl.DUBLE.mkv?expire=1795266368&hash=1qREDmRrIguQTdhLkw2YDw"
+            )
+        )
+        assertTrue(VideoLinkExtractor.isVideoDownloadUrl("https://cdn.example.com/video/sample.MP4"))
+        assertTrue(VideoLinkExtractor.isVideoDownloadUrl("http://cdn.example.com/movie.avi?token=123"))
+        assertFalse(VideoLinkExtractor.isVideoDownloadUrl("http://example.com/play-link/play.php?t=serie"))
+
+        // Non-video direct downloadable files
+        assertTrue(VideoLinkExtractor.isDirectDownloadableUrl("https://cdn.example.com/release/app-v2.apk"))
+        assertTrue(VideoLinkExtractor.isDirectDownloadableUrl("https://cdn.example.com/archive/pack.zip?token=abc"))
+        assertTrue(VideoLinkExtractor.isDirectDownloadableUrl("https://cdn.example.com/docs/manual.pdf"))
+        assertTrue(VideoLinkExtractor.isDirectDownloadableUrl("https://cdn.example.com/audio/track.mp3"))
+
+        // HTML body scraping ignores webpage images/logos but captures archives/apks/videos
+        val html = """<img src="https://site.com/logo.png"><a href="https://site.com/files/app.zip">Download</a>"""
+        val extracted = VideoLinkExtractor.extractDownloadableUrlsFromText(html, fromHtmlBody = true)
+        assertEquals(listOf("https://site.com/files/app.zip"), extracted)
+
+        val resolver = CurlRedirectResolver()
+        assertTrue(resolver.isSmartDirectDownloadResponse("application/zip", null, "https://site.com/dl?id=1"))
+        assertTrue(resolver.isSmartDirectDownloadResponse("text/plain", "attachment; filename=\"notes.txt\"", "https://site.com/dl?id=2"))
+        assertFalse(resolver.isSmartDirectDownloadResponse("text/html; charset=utf-8", null, "https://site.com/home"))
+    }
+
+    @Test
+    fun `github version comparison detects newer versions cleanly`() {
+        assertTrue(GitHubUpdateChecker.isNewerVersion("v1.0.1", "1.0"))
+        assertTrue(GitHubUpdateChecker.isNewerVersion("v2.0", "1.9.5"))
+        assertFalse(GitHubUpdateChecker.isNewerVersion("v1.0", "1.0"))
+        assertFalse(GitHubUpdateChecker.isNewerVersion("0.9.9", "1.0"))
+    }
+
+    @Test
+    fun `developer mode unlocks only with exact password ali3973`() {
+        val vm = LinkExtractorViewModel()
+        assertFalse(vm.screenState.value.isDeveloperMode)
+
+        assertFalse(vm.tryUnlockDeveloperMode("wrong"))
+        assertFalse(vm.tryUnlockDeveloperMode("ALI3973"))
+        assertFalse(vm.screenState.value.isDeveloperMode)
+
+        assertTrue(vm.tryUnlockDeveloperMode("ali3973"))
+        assertTrue(vm.screenState.value.isDeveloperMode)
+
+        vm.disableDeveloperMode()
+        assertFalse(vm.screenState.value.isDeveloperMode)
+    }
+
+    @Test
+    fun `normal mode strings do not mention curl in either English or Persian`() {
+        for (lang in AppLanguage.entries) {
+            val s = stringsFor(lang)
+            val normalTexts = listOf(
+                s.appName,
+                s.appSubtitle,
+                s.inputCardTitle,
+                s.inputPlaceholder,
+                s.inputHelper,
+                s.actionExtract,
+                s.loadingNormalMessage,
+                s.resultCardTitle,
+                s.emptyTitle,
+                s.emptyDesc,
+                s.errorNoVideoFound,
+                s.downloadsTitle,
+                s.downloadsEmptyTitle,
+                s.downloadsEmptyDesc,
+            )
+            for (text in normalTexts) {
+                assertFalse("Unexpected curl mention in: $text", text.contains("curl", ignoreCase = true))
+            }
+        }
+    }
+
+    @Test
+    fun `resolveFromRawTrace returns final dl10 tdmm2 ir mkv url from user curl trace`() {
+        val trace = """
+            curl -L -v "http://googfilmazappfordownfilmmedis.xyz/play-link/play.php?play-link/play.php?&t=serie&i=575432&m=09210076896&ap=Fj&s=vcp"
+            < HTTP/1.1 302 Found
+            < location: http://dl10-tdmm.cloudcdn.site/movies/sere/05/We.Are.All.Trying.Here/fasl1dub/We.Are.All.Trying.Here.E12.720p.NF.WEB-DL.Golchindl.DUBLE.mkv?expire=1795266368&hash=1qREDmRrIguQTdhLkw2YDw
+            * Issue another request to this URL: 'http://dl10-tdmm.cloudcdn.site/movies/sere/05/We.Are.All.Trying.Here/fasl1dub/We.Are.All.Trying.Here.E12.720p.NF.WEB-DL.Golchindl.DUBLE.mkv?expire=1795266368&hash=1qREDmRrIguQTdhLkw2YDw'
+            < HTTP/1.1 302 Found
+            < Location: http://dl10.tdmm2.ir/movies/sere/05/We.Are.All.Trying.Here/fasl1dub/We.Are.All.Trying.Here.E12.720p.NF.WEB-DL.Golchindl.DUBLE.mkv?expire=1795266368&hash=1qREDmRrIguQTdhLkw2YDw
+            * Issue another request to this URL: 'http://dl10.tdmm2.ir/movies/sere/05/We.Are.All.Trying.Here/fasl1dub/We.Are.All.Trying.Here.E12.720p.NF.WEB-DL.Golchindl.DUBLE.mkv?expire=1795266368&hash=1qREDmRrIguQTdhLkw2YDw'
+            < HTTP/1.1 200 OK
+            < Content-Type: application/octet-stream
+            < Content-Length: 755072553
+        """.trimIndent()
+
+        val resolver = CurlRedirectResolver()
+        val result = resolver.resolveFromRawTrace(trace)
+
+        assertEquals(
+            "http://dl10.tdmm2.ir/movies/sere/05/We.Are.All.Trying.Here/fasl1dub/We.Are.All.Trying.Here.E12.720p.NF.WEB-DL.Golchindl.DUBLE.mkv?expire=1795266368&hash=1qREDmRrIguQTdhLkw2YDw",
+            result.directVideoUrl,
+        )
+        assertEquals(
+            "We.Are.All.Trying.Here.E12.720p.NF.WEB-DL.Golchindl.DUBLE.mkv",
+            result.filename,
+        )
+        assertEquals("MKV", result.extension)
+        assertEquals("720.1 MB", result.fileSizeFormatted)
+        assertEquals(200, result.finalStatusCode)
+    }
+
+    @Test
+    fun `download task formats progress eta speed and concurrency filters cleanly`() {
+        val active = DownloadTask(
+            id = "1",
+            url = "http://example.com/a.mkv",
+            fileName = "a.mkv",
+            totalBytes = 100L * 1024L * 1024L,
+            downloadedBytes = 25L * 1024L * 1024L,
+            status = DownloadStatus.DOWNLOADING,
+            speedBytesPerSec = 2L * 1024L * 1024L,
+            etaSeconds = 95L,
+        )
+        val queued = DownloadTask(
+            id = "2",
+            url = "http://example.com/b.mp4",
+            fileName = "b.mp4",
+            status = DownloadStatus.QUEUED,
+        )
+        val completed = DownloadTask(
+            id = "3",
+            url = "http://example.com/c.avi",
+            fileName = "c.avi",
+            status = DownloadStatus.COMPLETED,
+        )
+
+        assertEquals(25, active.progressPercent)
+        assertEquals("2.0 MB/s", active.formattedSpeed())
+        assertEquals("1m 35s", active.formattedEta())
+
+        assertEquals(QueueConcurrency.ONE, QueueConcurrency.fromCode("1"))
+        assertEquals(QueueConcurrency.TWO, QueueConcurrency.fromCode("invalid"))
+        assertEquals(QueueConcurrency.ALL, QueueConcurrency.fromCode("all"))
+
+        val allTasks = listOf(active, queued, completed)
+        assertEquals(3, filterDownloadTasks(allTasks, DownloadFilter.ALL).size)
+        assertEquals(listOf(active), filterDownloadTasks(allTasks, DownloadFilter.ACTIVE))
+        assertEquals(listOf(queued), filterDownloadTasks(allTasks, DownloadFilter.QUEUED))
+        assertEquals(listOf(completed), filterDownloadTasks(allTasks, DownloadFilter.COMPLETED))
+    }
+
+    @Test
+    fun `youtube and instagram url detectors parse all standard link formats`() {
+        assertTrue(YouTubeExtractor.isYouTubeUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+        assertEquals("dQw4w9WgXcQ", YouTubeExtractor.extractVideoId("https://youtu.be/dQw4w9WgXcQ?si=123"))
+        assertEquals("abcDEF_1234", YouTubeExtractor.extractVideoId("https://youtube.com/shorts/abcDEF_1234?feature=share"))
+        assertEquals("xyz98765432", YouTubeExtractor.extractVideoId("https://music.youtube.com/watch?v=xyz98765432"))
+        assertFalse(YouTubeExtractor.isYouTubeUrl("https://www.instagram.com/reel/Cx999/"))
+
+        assertTrue(InstagramExtractor.isInstagramUrl("https://www.instagram.com/reel/C8AbCdEf123/?igsh=123"))
+        assertEquals("C8AbCdEf123", InstagramExtractor.extractShortcode("https://www.instagram.com/reel/C8AbCdEf123/"))
+        assertEquals("PostShort12", InstagramExtractor.extractShortcode("https://instagram.com/p/PostShort12/"))
+        assertEquals("TvCode99", InstagramExtractor.extractShortcode("https://m.instagram.com/tv/TvCode99/"))
+        assertTrue(InstagramExtractor.isInstagramUrl("https://www.instagram.com/share/reel/abcXYZ"))
+
+        // Share text containing embedded YouTube URL extracts cleanly
+        val shared = "Check out this video https://youtu.be/dQw4w9WgXcQ?si=test"
+        assertEquals("https://youtu.be/dQw4w9WgXcQ?si=test", VideoLinkExtractor.extractInputUrl(shared))
+    }
+
+    @Test
+    fun `viewmodel selectYouTubeOption updates active direct link and clears picker`() {
+        val vm = LinkExtractorViewModel()
+        val videoOpt = YouTubeStreamOption(
+            itag = 22,
+            url = "https://cdn.example.com/video720.mp4",
+            qualityLabel = "720p",
+            container = "MP4",
+            category = MediaFormatCategory.VIDEO_WITH_AUDIO,
+            fileSizeFormatted = "45.0 MB",
+            suggestedFileName = "Test_Video_720p.mp4",
+            userAgent = "YT-UA",
+        )
+        val audioOpt = YouTubeStreamOption(
+            itag = 140,
+            url = "https://cdn.example.com/audio128.m4a",
+            qualityLabel = "128 kbps",
+            container = "M4A",
+            category = MediaFormatCategory.AUDIO_ONLY,
+            bitrateKbps = 128,
+            fileSizeFormatted = "3.5 MB",
+            suggestedFileName = "Test_Video_128_kbps.m4a",
+            userAgent = "YT-UA",
+        )
+        val initialResult = com.example.network.CurlResolutionResult(
+            sourceUrl = "https://youtu.be/dQw4w9WgXcQ",
+            directVideoUrl = videoOpt.url,
+            candidateVideoUrls = listOf(videoOpt.url, audioOpt.url),
+            filename = videoOpt.suggestedFileName,
+            extension = "MP4",
+            fileSizeFormatted = "45.0 MB",
+            finalStatusCode = 200,
+            hops = emptyList(),
+            verboseLog = "[YouTube] trace",
+            youtubeOptions = listOf(videoOpt, audioOpt),
+            mediaTitle = "Test Video",
+            customUserAgent = "YT-UA",
+        )
+
+        vm.onSelectHistoryItem(initialResult)
+        vm.openYouTubeFormatPicker()
+        assertEquals(initialResult, vm.screenState.value.pendingYouTubeResult)
+
+        val chosen = vm.selectYouTubeOption(audioOpt)
+        assertEquals(audioOpt.url, chosen?.directVideoUrl)
+        assertEquals("M4A", chosen?.extension)
+        assertEquals("Test_Video_128_kbps.m4a", chosen?.filename)
+        assertEquals(null, vm.screenState.value.pendingYouTubeResult)
+
+        val currentSuccess = vm.screenState.value.uiState as ExtractorUiState.Success
+        assertEquals(audioOpt.url, currentSuccess.result.directVideoUrl)
+        assertEquals("YT-UA", currentSuccess.result.customUserAgent)
+    }
+
+    @Test
+    fun `unsupported platform strings exist in both languages without curl mention`() {
+        for (lang in AppLanguage.entries) {
+            val s = stringsFor(lang)
+            assertTrue(s.errorYouTubeUnsupported.isNotBlank())
+            assertTrue(s.errorInstagramUnsupported.isNotBlank())
+            assertFalse(s.errorYouTubeUnsupported.contains("curl", ignoreCase = true))
+            assertFalse(s.errorInstagramUnsupported.contains("curl", ignoreCase = true))
+        }
+    }
+
+    @Test
+    fun `instagram shortcode extractor preserves reel and post codes`() {
+        assertEquals(
+            "Df-HWOzsvcb",
+            InstagramExtractor.extractShortcode("https://www.instagram.com/reel/Df-HWOzsvcb/?evlk=MWJsMjB0Z3F4emkydw=="),
+        )
+        assertEquals(
+            "PostCode123",
+            InstagramExtractor.extractShortcode("https://instagr.am/p/PostCode123/"),
+        )
+        assertTrue(InstagramExtractor.isInstagramUrl("https://instagr.am/reel/Abc123/"))
+    }
+}
