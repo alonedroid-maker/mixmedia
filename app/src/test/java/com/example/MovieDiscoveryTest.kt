@@ -15,6 +15,8 @@ import com.example.media.SearchEngineOption
 import com.example.media.SearchLanguagePreference
 import com.example.media.SourceDiscoveryEngine
 import com.example.media.SourceSearchTarget
+import com.example.media.SourceSiteConfig
+import com.example.media.SourceSitesCatalog
 import com.example.media.ZeroKeyMetadataEnricher
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -236,6 +238,36 @@ class MovieDiscoveryTest {
         assertTrue(vm.popRoute())
         assertTrue(vm.state.value.currentRoute is DiscoveryRoute.HomeSearch)
         assertFalse(vm.popRoute())
+    }
+
+    @Test
+    fun `source sites catalog includes myf2ms and merges built in updates without losing custom sites`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val persistence = MediaPersistence(context)
+
+        val builtIn = SourceSitesCatalog.BUILT_IN_SITES
+        val myf2ms = builtIn.firstOrNull { it.id == "myf2ms" }
+        assertNotNull("MyF2Ms should exist in SourceSitesCatalog", myf2ms)
+        assertEquals("https://www.myf2ms.top", myf2ms!!.baseUrl)
+        assertEquals("https://www.myf2ms.top/?s={query}", myf2ms.searchUrlTemplate)
+
+        val previousSaved = listOf(
+            builtIn.first { it.id == "serialblog" }.copy(baseUrl = "https://old-domain.example", enabled = false),
+            SourceSiteConfig(
+                id = "custom_1",
+                name = "User Custom Site",
+                baseUrl = "https://user-custom.example.com",
+                searchUrlTemplate = "https://user-custom.example.com/?s={query}",
+                isCustom = true,
+                enabled = true,
+            ),
+        )
+        val merged = persistence.mergeWithBuiltInCatalog(saved = previousSaved, defaults = builtIn)
+        val mergedSerialBlog = merged.first { it.id == "serialblog" }
+        assertEquals("https://serialblog1.top", mergedSerialBlog.baseUrl)
+        assertFalse("User toggle off should be preserved across catalog updates", mergedSerialBlog.enabled)
+        assertTrue("New built-in myf2ms should appear on upgrade", merged.any { it.id == "myf2ms" })
+        assertTrue("User custom site should be preserved", merged.any { it.id == "custom_1" && it.isCustom })
     }
 
     @Test

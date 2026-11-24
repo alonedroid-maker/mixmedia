@@ -140,14 +140,31 @@ class MediaPersistence(context: Context) {
                     )
                 }
             }
-            if (saved.isEmpty()) defaults else {
-                // Ensure newly added built-in defaults appear if not yet persisted
-                val existingIds = saved.map { it.id }.toSet()
-                saved + defaults.filterNot { it.id in existingIds }
+            if (saved.isEmpty()) {
+                defaults
+            } else {
+                mergeWithBuiltInCatalog(saved = saved, defaults = defaults)
             }
         } catch (_: Exception) {
             defaults
         }
+    }
+
+    internal fun mergeWithBuiltInCatalog(
+        saved: List<SourceSiteConfig>,
+        defaults: List<SourceSiteConfig>,
+    ): List<SourceSiteConfig> {
+        val savedById = saved.associateBy { it.id }
+        val builtInMerged = defaults.map { builtIn ->
+            val previous = savedById[builtIn.id]
+            if (previous != null) {
+                builtIn.copy(enabled = previous.enabled)
+            } else {
+                builtIn
+            }
+        }
+        val customSites = saved.filter { it.isCustom }
+        return builtInMerged + customSites
     }
 
     fun saveSourceSites(sites: List<SourceSiteConfig>) = synchronized(lock) {
@@ -291,54 +308,6 @@ class MediaPersistence(context: Context) {
         private const val MAX_SAVED_ITEMS = 50
         private const val MAX_HISTORY_ITEMS = 15
 
-        fun defaultSourceSites(): List<SourceSiteConfig> = listOf(
-            SourceSiteConfig(
-                id = "serialblog",
-                name = "SerialBlog (سریال بلاگ)",
-                baseUrl = "https://serialblog1.top",
-                searchUrlTemplate = "https://serialblog1.top/?s={query}",
-                isArchive = false,
-                enabled = true,
-                isCustom = false,
-            ),
-            SourceSiteConfig(
-                id = "donyayeserial",
-                name = "DonyayeSerial (دنیای سریال)",
-                baseUrl = "https://donyayeserial-new1.top",
-                searchUrlTemplate = "https://donyayeserial-new1.top/?s={query}",
-                isArchive = false,
-                enabled = true,
-                isCustom = false,
-            ),
-            SourceSiteConfig(
-                id = "donyayeserial_archive_all",
-                name = "DonyayeSerial Archive 26k+",
-                baseUrl = "https://dls2.aparatchi-dlcenter.top/DonyayeSerial/donyaye_serial_all_archive.html",
-                searchUrlTemplate = "https://dls2.aparatchi-dlcenter.top/DonyayeSerial/donyaye_serial_all_archive.html",
-                isArchive = true,
-                enabled = true,
-                isCustom = false,
-                requiresDomesticIpHint = true,
-            ),
-            SourceSiteConfig(
-                id = "donyayeserial_archive_10k",
-                name = "DonyayeSerial Archive 10k",
-                baseUrl = "https://dls6.aparatchi-dlcenter.top/DonyayeSerial/10_thous.html",
-                searchUrlTemplate = "https://dls6.aparatchi-dlcenter.top/DonyayeSerial/10_thous.html",
-                isArchive = true,
-                enabled = true,
-                isCustom = false,
-                requiresDomesticIpHint = true,
-            ),
-            SourceSiteConfig(
-                id = "archive_org",
-                name = "Internet Archive",
-                baseUrl = "https://archive.org",
-                searchUrlTemplate = "https://archive.org/search?query={query}",
-                isArchive = false,
-                enabled = true,
-                isCustom = false,
-            ),
-        )
+        fun defaultSourceSites(): List<SourceSiteConfig> = SourceSitesCatalog.BUILT_IN_SITES
     }
 }

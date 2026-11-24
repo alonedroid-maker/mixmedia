@@ -147,8 +147,8 @@ class SourceDiscoveryEngine(
         val searchPageUrl = site.searchUrlTemplate.replace("{query}", encoded)
         val domain = site.baseUrl.toHttpUrlOrNull()?.host ?: site.baseUrl
 
-        // Special fast path for WordPress JSON sites (SerialBlog follows redirect serialblog1.top -> serialblog2.top)
-        if (site.id == "serialblog" || site.isCustom) {
+        // Fast path for WordPress JSON sites (SerialBlog, MyF2Ms, custom WP sites, etc.)
+        if (site.id != "archive_org") {
             val wpHits = tryWordPressApiSearch(site, encoded)
             if (wpHits != null) {
                 return wpHits to null
