@@ -12,14 +12,14 @@ import com.example.download.DownloadTask
 import com.example.download.QueueConcurrency
 import com.example.intent.VlcIntentHelper
 import com.example.network.InstagramExtractor
-import com.example.network.MediaFormatCategory
 import com.example.network.YouTubeExtractor
 import com.example.ui.theme.ThemeMode
 import java.io.File
 import java.util.Properties
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -214,80 +214,65 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `youtube player json parser extracts muxed video adaptive video and audio music streams`() {
-        val sampleJson = JSONObject(
-            """
-            {
-              "videoDetails": {
-                "title": "Sample Music Video",
-                "author": "Test Artist",
-                "lengthSeconds": "180"
-              },
-              "streamingData": {
-                "formats": [
-                  {
-                    "itag": 22,
-                    "url": "https://rr1.googlevideo.com/videoplayback?itag=22",
-                    "mimeType": "video/mp4; codecs=\"avc1.64001F, mp4a.40.2\"",
-                    "qualityLabel": "720p",
-                    "bitrate": 1500000,
-                    "contentLength": "33750000"
-                  }
-                ],
-                "adaptiveFormats": [
-                  {
-                    "itag": 137,
-                    "url": "https://rr1.googlevideo.com/videoplayback?itag=137",
-                    "mimeType": "video/mp4; codecs=\"avc1.640028\"",
-                    "qualityLabel": "1080p",
-                    "bitrate": 3200000,
-                    "contentLength": "72000000"
-                  },
-                  {
-                    "itag": 140,
-                    "url": "https://rr1.googlevideo.com/videoplayback?itag=140",
-                    "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
-                    "bitrate": 128000,
-                    "contentLength": "2880000"
-                  },
-                  {
-                    "itag": 251,
-                    "url": "https://rr1.googlevideo.com/videoplayback?itag=251",
-                    "mimeType": "audio/webm; codecs=\"opus\"",
-                    "bitrate": 160000
-                  }
-                ]
-              }
-            }
-            """.trimIndent()
-        )
+    fun `youtube extractor parses oembed, data api v3, iso8601 durations, and unavailable items`() {
+        assertEquals(3750L, YouTubeExtractor.parseIso8601DurationSeconds("PT1H2M30S"))
+        assertEquals(300L, YouTubeExtractor.parseIso8601DurationSeconds("PT5M"))
+        assertEquals(45L, YouTubeExtractor.parseIso8601DurationSeconds("PT45S"))
+        assertNull(YouTubeExtractor.parseIso8601DurationSeconds("PT0S"))
+        assertNull(YouTubeExtractor.parseIso8601DurationSeconds("invalid"))
 
         val extractor = YouTubeExtractor()
-        val parsed = extractor.parsePlayerJson(sampleJson, "dQw4w9WgXcQ", "TestUA")
+        val canonical = YouTubeExtractor.canonicalWatchUrl("dQw4w9WgXcQ")
+        assertEquals("https://www.youtube.com/watch?v=dQw4w9WgXcQ", canonical)
 
-        assertEquals("Sample Music Video", parsed.title)
-        assertEquals("Test Artist", parsed.author)
-        assertEquals(180L, parsed.durationSeconds)
-        assertEquals(4, parsed.options.size)
+        val oembedJson = """
+            {
+              "title": "Official oEmbed Title",
+              "author_name": "Creator Studio",
+              "author_url": "https://www.youtube.com/@creator",
+              "thumbnail_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+            }
+        """.trimIndent()
+        val oembedParsed = extractor.parseOEmbedJson(oembedJson, "dQw4w9WgXcQ", canonical)
+        assertNotNull(oembedParsed)
+        assertEquals("Official oEmbed Title", oembedParsed?.title)
+        assertEquals("Creator Studio", oembedParsed?.channelTitle)
+        assertTrue(oembedParsed?.isAvailable == true)
 
-        val muxed = parsed.options.first { it.itag == 22 }
-        assertEquals(MediaFormatCategory.VIDEO_WITH_AUDIO, muxed.category)
-        assertEquals("720p", muxed.qualityLabel)
-        assertEquals("MP4", muxed.container)
+        val dataApiJson = """
+            {
+              "items": [
+                {
+                  "snippet": {
+                    "title": "Official Data API Title",
+                    "channelTitle": "Verified Channel",
+                    "channelId": "UC_test_123",
+                    "publishedAt": "2025-09-14T18:00:00Z",
+                    "thumbnails": {
+                      "high": { "url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg" },
+                      "maxres": { "url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg" }
+                    }
+                  },
+                  "contentDetails": {
+                    "duration": "PT3M15S"
+                  }
+                }
+              ]
+            }
+        """.trimIndent()
+        val dataParsed = extractor.parseDataApiJson(dataApiJson, "dQw4w9WgXcQ", canonical)
+        assertNotNull(dataParsed)
+        assertEquals("Official Data API Title", dataParsed?.title)
+        assertEquals("Verified Channel", dataParsed?.channelTitle)
+        assertEquals("https://www.youtube.com/channel/UC_test_123", dataParsed?.channelUrl)
+        assertEquals("2025-09-14", dataParsed?.publishedAt)
+        assertEquals(195L, dataParsed?.durationSeconds)
+        assertEquals("https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg", dataParsed?.thumbnailUrl)
 
-        val videoOnly = parsed.options.first { it.itag == 137 }
-        assertEquals(MediaFormatCategory.VIDEO_ONLY, videoOnly.category)
-        assertEquals("1080p", videoOnly.qualityLabel)
-
-        val audioM4a = parsed.options.first { it.itag == 140 }
-        assertEquals(MediaFormatCategory.AUDIO_ONLY, audioM4a.category)
-        assertEquals("M4A", audioM4a.container)
-        assertEquals("128 kbps", audioM4a.qualityLabel)
-
-        val audioOpus = parsed.options.first { it.itag == 251 }
-        assertEquals(MediaFormatCategory.AUDIO_ONLY, audioOpus.category)
-        assertEquals("OPUS", audioOpus.container)
-        assertEquals("160 kbps", audioOpus.qualityLabel)
+        val emptyItemsJson = """{ "items": [] }"""
+        val unavailableParsed = extractor.parseDataApiJson(emptyItemsJson, "dQw4w9WgXcQ", canonical)
+        assertNotNull(unavailableParsed)
+        assertFalse(unavailableParsed!!.isAvailable)
     }
 
     @Test

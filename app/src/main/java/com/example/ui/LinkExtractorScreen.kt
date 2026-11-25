@@ -82,6 +82,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -160,6 +161,10 @@ fun MediaXApp(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     var pendingConflictRequest by remember { mutableStateOf<PendingDownloadRequest?>(null) }
+
+    LaunchedEffect(discoveryState.preferences.youtubeApiKey) {
+        viewModel.setYouTubeApiKey(discoveryState.preferences.youtubeApiKey)
+    }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -639,6 +644,14 @@ fun MediaXApp(
                                                 openExternalUrl(site.baseUrl)
                                             }
                                         },
+                                        onRefreshTrending = discoveryViewModel::refreshTrending,
+                                        onOpenProviderUrl = { url, title ->
+                                            if (discoveryState.preferences.preferInternalBrowser) {
+                                                discoveryViewModel.openInternalBrowser(url, title)
+                                            } else {
+                                                openExternalUrl(url)
+                                            }
+                                        },
                                     )
                                 }
 
@@ -664,6 +677,9 @@ fun MediaXApp(
                                             }
                                         },
                                         onShareMedia = ::shareText,
+                                        onDownloadAuthorizedUrl = { url, name ->
+                                            startManualDownload(url, name)
+                                        },
                                     )
                                 }
 
@@ -728,14 +744,23 @@ fun MediaXApp(
                                 onShowMessage = ::showMessage,
                                 onInputChanged = viewModel::onInputChanged,
                                 onClearInput = viewModel::onClearInput,
-                                onExecute = { viewModel.executeExtraction() },
+                                onExecute = {
+                                    viewModel.executeExtraction(youtubeApiKey = discoveryState.preferences.youtubeApiKey)
+                                },
                                 onCancel = viewModel::onCancelExecution,
                                 onToggleLogExpanded = viewModel::onToggleLogExpanded,
                                 onSelectHistoryItem = viewModel::onSelectHistoryItem,
                                 onAcceptClipboardUrl = viewModel::acceptDetectedClipboardUrl,
                                 onDismissClipboardUrl = viewModel::dismissDetectedClipboardUrl,
                                 onDownloadInApp = ::startDownloadFromResolver,
-                                onOpenQualityPicker = viewModel::openYouTubeFormatPicker,
+                                onDownloadAuthorizedUrl = { url, suggestedName ->
+                                    requestDownloadWithConflictCheck(
+                                        url = url,
+                                        sourcePlayUrl = (state.uiState as? ExtractorUiState.Success)?.result?.sourceUrl,
+                                        suggestedFileName = suggestedName,
+                                        fromResolver = true,
+                                    )
+                                },
                                 onOpenXQualityPicker = viewModel::openXQualityPicker,
                             )
                         }
@@ -925,23 +950,6 @@ fun MediaXApp(
                 )
             }
 
-            state.pendingYouTubeResult?.let { ytResult ->
-                YouTubeFormatPickerDialog(
-                    result = ytResult,
-                    strings = strings,
-                    onDownloadOption = { option ->
-                        val updated = viewModel.selectYouTubeOption(option)
-                        if (updated != null) {
-                            startDownloadFromResolver(updated)
-                        }
-                    },
-                    onSelectOption = { option ->
-                        viewModel.selectYouTubeOption(option)
-                    },
-                    onDismiss = viewModel::dismissYouTubeFormatPicker,
-                )
-            }
-
             state.pendingXResult?.let { xResult ->
                 XQualityPickerDialog(
                     result = xResult,
@@ -976,7 +984,7 @@ private fun ResolverScreen(
     onAcceptClipboardUrl: () -> Unit,
     onDismissClipboardUrl: () -> Unit,
     onDownloadInApp: (CurlResolutionResult) -> Unit,
-    onOpenQualityPicker: () -> Unit,
+    onDownloadAuthorizedUrl: (url: String, suggestedName: String?) -> Unit,
     onOpenXQualityPicker: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -1291,27 +1299,36 @@ private fun ResolverScreen(
                         exit = fadeOut(),
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                            DirectLinkResultCard(
-                                result = uiState.result,
-                                strings = strings,
-                                isDeveloperMode = state.isDeveloperMode,
-                                onDownloadInApp = onDownloadInApp,
-                                onCopyLink = {
-                                    copyToClipboard("direct_video_url", it, strings.msgCopied)
-                                },
-                                onOpenLink = ::openDownloadUrl,
-                                onShareLink = ::shareDownloadUrl,
-                                onOpenQualityPicker = if (uiState.result.youtubeOptions.isNotEmpty()) {
-                                    onOpenQualityPicker
-                                } else {
-                                    null
-                                },
-                                onOpenXQualityPicker = if (uiState.result.xVideoVariants.size > 1) {
-                                    onOpenXQualityPicker
-                                } else {
-                                    null
-                                },
-                            )
+                            val ytInfo = uiState.result.youtubeInfo
+                            if (ytInfo != null) {
+                                YouTubeCompliantCard(
+                                    yt = ytInfo,
+                                    strings = strings,
+                                    onOpenOfficialUrl = ::openDownloadUrl,
+                                    onCopyLink = {
+                                        copyToClipboard("youtube_url", it, strings.msgCopied)
+                                    },
+                                    onShareLink = ::shareDownloadUrl,
+                                    onDownloadAuthorizedUrl = onDownloadAuthorizedUrl,
+                                )
+                            } else {
+                                DirectLinkResultCard(
+                                    result = uiState.result,
+                                    strings = strings,
+                                    isDeveloperMode = state.isDeveloperMode,
+                                    onDownloadInApp = onDownloadInApp,
+                                    onCopyLink = {
+                                        copyToClipboard("direct_video_url", it, strings.msgCopied)
+                                    },
+                                    onOpenLink = ::openDownloadUrl,
+                                    onShareLink = ::shareDownloadUrl,
+                                    onOpenXQualityPicker = if (uiState.result.xVideoVariants.size > 1) {
+                                        onOpenXQualityPicker
+                                    } else {
+                                        null
+                                    },
+                                )
+                            }
 
                             if (state.isDeveloperMode) {
                                 RedirectChainCard(
@@ -1339,6 +1356,7 @@ private fun ResolverScreen(
                         ErrorType.INVALID_URL -> strings.errorInvalidUrl
                         ErrorType.NO_VIDEO_FOUND -> strings.errorNoVideoFound
                         ErrorType.YOUTUBE_UNSUPPORTED -> strings.errorYouTubeUnsupported
+                        ErrorType.YOUTUBE_UNAVAILABLE -> strings.errorYouTubeUnavailable
                         ErrorType.INSTAGRAM_UNSUPPORTED -> strings.errorInstagramUnsupported
                         ErrorType.X_INVALID_URL -> strings.xDownloader.errorInvalidUrl
                         ErrorType.X_NO_VIDEO -> strings.xDownloader.errorNoVideo

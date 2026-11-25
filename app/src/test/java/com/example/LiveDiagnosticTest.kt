@@ -3,9 +3,12 @@ package com.example
 import com.example.network.CurlRedirectResolver
 import com.example.network.SocialPlatform
 import com.example.network.UnsupportedPlatformException
+import com.example.network.YouTubeUnavailableException
+import java.io.IOException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -31,16 +34,24 @@ class LiveDiagnosticTest {
             } catch (e: UnsupportedPlatformException) {
                 assertEquals(SocialPlatform.INSTAGRAM, e.platform)
                 println("IG_UNSUPPORTED_CLEAN: ${e.message}")
+            } catch (e: IOException) {
+                println("IG_OFFLINE_SKIPPED: ${e.message}")
             }
 
             val ytUrl = "https://youtu.be/UHrrwnJ4hUI?si=Yohp5coRJjA1WH1f"
             try {
                 val ytRes = resolver.resolve(ytUrl)
-                assertTrue(ytRes.youtubeOptions.isNotEmpty())
-                println("YT_VERIFIED: ${ytRes.mediaTitle} options=${ytRes.youtubeOptions.size}")
+                assertNotNull("Compliant YouTube metadata should be populated", ytRes.youtubeInfo)
+                assertNull("Compliant YouTube resolver must not scrape direct video streams", ytRes.directVideoUrl)
+                assertEquals("https://www.youtube.com/watch?v=UHrrwnJ4hUI", ytRes.youtubeInfo?.canonicalUrl)
+                println("YT_COMPLIANT_VERIFIED: ${ytRes.youtubeInfo?.title}")
+            } catch (e: YouTubeUnavailableException) {
+                println("YT_UNAVAILABLE_CLEAN: ${e.message}")
             } catch (e: UnsupportedPlatformException) {
                 assertEquals(SocialPlatform.YOUTUBE, e.platform)
                 println("YT_UNSUPPORTED_CLEAN: ${e.message}")
+            } catch (e: IOException) {
+                println("YT_OFFLINE_SKIPPED: ${e.message}")
             }
         }
     }

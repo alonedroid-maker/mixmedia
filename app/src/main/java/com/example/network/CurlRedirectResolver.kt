@@ -36,7 +36,7 @@ data class CurlResolutionResult(
     val finalStatusCode: Int,
     val hops: List<RedirectHop>,
     val verboseLog: String,
-    val youtubeOptions: List<YouTubeStreamOption> = emptyList(),
+    val youtubeInfo: YouTubeMetadataInfo? = null,
     val mediaTitle: String? = null,
     val mediaAuthor: String? = null,
     val mediaDurationSeconds: Long? = null,
@@ -101,37 +101,36 @@ class CurlRedirectResolver(
     suspend fun resolve(
         inputUrl: String,
         cookieHeader: String? = null,
+        youtubeApiKey: String? = null,
         onLogUpdate: (traceSoFar: String, currentHop: Int) -> Unit = { _, _ -> },
     ): CurlResolutionResult = withContext(ioDispatcher) {
         if (YouTubeExtractor.isYouTubeUrl(inputUrl)) {
-            val yt = youtubeExtractor.extract(
+            val yt = youtubeExtractor.fetchMetadata(
                 inputUrl = inputUrl,
-                cookieHeader = cookieHeader,
+                youtubeApiKey = youtubeApiKey,
                 onLogUpdate = onLogUpdate,
             )
-            val defaultOption = yt.options.firstOrNull { it.category == MediaFormatCategory.VIDEO_WITH_AUDIO }
-                ?: yt.options.firstOrNull()
-            if (defaultOption == null) {
-                throw UnsupportedPlatformException(
-                    platform = SocialPlatform.YOUTUBE,
+            if (!yt.isAvailable) {
+                throw YouTubeUnavailableException(
+                    reason = yt.unavailableReason,
                     verboseLog = yt.verboseLog,
                 )
             }
             return@withContext CurlResolutionResult(
-                sourceUrl = inputUrl,
-                directVideoUrl = defaultOption.url,
-                candidateVideoUrls = yt.options.map { it.url },
-                filename = defaultOption.suggestedFileName,
-                extension = defaultOption.container,
-                fileSizeFormatted = defaultOption.fileSizeFormatted,
+                sourceUrl = yt.canonicalUrl,
+                directVideoUrl = null,
+                candidateVideoUrls = emptyList(),
+                filename = null,
+                extension = null,
+                fileSizeFormatted = null,
                 finalStatusCode = 200,
                 hops = yt.hops,
                 verboseLog = yt.verboseLog,
-                youtubeOptions = yt.options,
+                youtubeInfo = yt,
                 mediaTitle = yt.title,
-                mediaAuthor = yt.author,
+                mediaAuthor = yt.channelTitle,
                 mediaDurationSeconds = yt.durationSeconds,
-                customUserAgent = defaultOption.userAgent,
+                thumbnailUrl = yt.thumbnailUrl,
             )
         }
 

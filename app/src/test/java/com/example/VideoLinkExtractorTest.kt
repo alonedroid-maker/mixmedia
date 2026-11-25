@@ -6,20 +6,18 @@ import com.example.download.QueueConcurrency
 import com.example.network.CurlRedirectResolver
 import com.example.network.GitHubUpdateChecker
 import com.example.network.InstagramExtractor
-import com.example.network.MediaFormatCategory
 import com.example.network.VideoLinkExtractor
 import com.example.network.YouTubeExtractor
-import com.example.network.YouTubeStreamOption
 import com.example.ui.AppDestination
 import com.example.ui.AppLanguage
 import com.example.ui.DownloadFilter
-import com.example.ui.ExtractorUiState
 import com.example.ui.LinkExtractorViewModel
 import com.example.ui.filterDownloadTasks
 import com.example.ui.stringsFor
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -237,57 +235,13 @@ class VideoLinkExtractorTest {
     }
 
     @Test
-    fun `viewmodel selectYouTubeOption updates active direct link and clears picker`() {
-        val vm = LinkExtractorViewModel()
-        val videoOpt = YouTubeStreamOption(
-            itag = 22,
-            url = "https://cdn.example.com/video720.mp4",
-            qualityLabel = "720p",
-            container = "MP4",
-            category = MediaFormatCategory.VIDEO_WITH_AUDIO,
-            fileSizeFormatted = "45.0 MB",
-            suggestedFileName = "Test_Video_720p.mp4",
-            userAgent = "YT-UA",
-        )
-        val audioOpt = YouTubeStreamOption(
-            itag = 140,
-            url = "https://cdn.example.com/audio128.m4a",
-            qualityLabel = "128 kbps",
-            container = "M4A",
-            category = MediaFormatCategory.AUDIO_ONLY,
-            bitrateKbps = 128,
-            fileSizeFormatted = "3.5 MB",
-            suggestedFileName = "Test_Video_128_kbps.m4a",
-            userAgent = "YT-UA",
-        )
-        val initialResult = com.example.network.CurlResolutionResult(
-            sourceUrl = "https://youtu.be/dQw4w9WgXcQ",
-            directVideoUrl = videoOpt.url,
-            candidateVideoUrls = listOf(videoOpt.url, audioOpt.url),
-            filename = videoOpt.suggestedFileName,
-            extension = "MP4",
-            fileSizeFormatted = "45.0 MB",
-            finalStatusCode = 200,
-            hops = emptyList(),
-            verboseLog = "[YouTube] trace",
-            youtubeOptions = listOf(videoOpt, audioOpt),
-            mediaTitle = "Test Video",
-            customUserAgent = "YT-UA",
-        )
-
-        vm.onSelectHistoryItem(initialResult)
-        vm.openYouTubeFormatPicker()
-        assertEquals(initialResult, vm.screenState.value.pendingYouTubeResult)
-
-        val chosen = vm.selectYouTubeOption(audioOpt)
-        assertEquals(audioOpt.url, chosen?.directVideoUrl)
-        assertEquals("M4A", chosen?.extension)
-        assertEquals("Test_Video_128_kbps.m4a", chosen?.filename)
-        assertEquals(null, vm.screenState.value.pendingYouTubeResult)
-
-        val currentSuccess = vm.screenState.value.uiState as ExtractorUiState.Success
-        assertEquals(audioOpt.url, currentSuccess.result.directVideoUrl)
-        assertEquals("YT-UA", currentSuccess.result.customUserAgent)
+    fun `youtube url validator accepts valid paths and rejects spoofed hosts`() {
+        assertEquals("UHrrwnJ4hUI", YouTubeExtractor.extractVideoId("https://youtu.be/UHrrwnJ4hUI?si=test"))
+        assertEquals("dQw4w9WgXcQ", YouTubeExtractor.extractVideoId("https://www.youtube.com/live/dQw4w9WgXcQ?feature=share"))
+        assertEquals("dQw4w9WgXcQ", YouTubeExtractor.extractVideoId("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"))
+        assertNull(YouTubeExtractor.extractVideoId("https://evil-youtube.com/watch?v=dQw4w9WgXcQ"))
+        assertNull(YouTubeExtractor.extractVideoId("https://youtube.com.attacker.org/watch?v=dQw4w9WgXcQ"))
+        assertNull(YouTubeExtractor.extractVideoId("https://www.youtube.com/watch?v=short"))
     }
 
     @Test

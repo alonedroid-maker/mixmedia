@@ -127,45 +127,191 @@ internal class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
 
     fun fetchPopularTvMazeShows(limit: Int = 12): List<MediaSearchResult> {
         val body = getString("https://api.tvmaze.com/shows?page=0") ?: return emptyList()
+        return parsePopularTvMazeShows(body, limit)
+    }
+
+    internal fun parsePopularTvMazeShows(rawJson: String, limit: Int = 12): List<MediaSearchResult> {
         return try {
-            val arr = JSONArray(body)
+            val arr = JSONArray(rawJson)
             val candidates = ArrayList<Pair<Double, MediaSearchResult>>(60)
             for (i in 0 until arr.length()) {
                 val show = arr.optJSONObject(i) ?: continue
                 val rating = show.optJSONObject("rating")?.optDouble("average")?.takeIf { !it.isNaN() } ?: 0.0
                 val weight = show.optDouble("weight", 0.0).takeIf { !it.isNaN() } ?: 0.0
                 if (rating < 8.2 && weight < 92.0) continue
-                val tvMazeId = show.optInt("id", -1).takeIf { it > 0 } ?: continue
-                val name = show.optString("name").takeIf { it.isNotBlank() } ?: continue
-                val year = show.optString("premiered").take(4).toIntOrNull()
-                val genres = show.optJSONArray("genres")?.toStringList().orEmpty()
-                val runtime = show.optInt("averageRuntime", 0).takeIf { it > 0 }
-                    ?: show.optInt("runtime", 0).takeIf { it > 0 }
-                val poster = show.optJSONObject("image")?.let { img ->
-                    img.optString("medium").ifBlank { img.optString("original") }
-                }?.takeIf { it.startsWith("http") }
-                val imdbId = show.optJSONObject("externals")?.optString("imdb")?.takeIf { it.startsWith("tt") }
-                val summary = stripHtmlTags(show.optString("summary"))
-                candidates.add(
-                    (weight + rating * 5.0) to MediaSearchResult(
-                        id = imdbId?.let { "imdb:$it" } ?: "tvmaze:$tvMazeId",
-                        mediaType = MediaType.TV,
-                        title = name,
-                        originalTitle = name,
-                        releaseYear = year,
-                        posterUrl = poster,
-                        runtimeMinutes = runtime,
-                        genres = genres,
-                        imdbRating = rating.takeIf { it > 0.0 },
-                        overview = summary.takeIf { it.isNotBlank() },
-                        imdbId = imdbId,
-                        tvMazeId = tvMazeId,
-                    )
-                )
+                val parsed = parseTvMazeShowSummary(show) ?: continue
+                candidates.add((weight + rating * 5.0) to parsed)
             }
             candidates.sortedByDescending { it.first }.map { it.second }.take(limit)
         } catch (_: Exception) {
             emptyList()
+        }
+    }
+
+    suspend fun fetchTrendingTvMazeFallback(limit: Int = 5): List<MediaSearchResult> = coroutineScope {
+        val body = getString("https://api.tvmaze.com/shows?page=0") ?: return@coroutineScope emptyList()
+        val topShows = parseTrendingTvMazeJson(body, limit)
+        topShows.map { show ->
+            async {
+                val id = show.tvMazeId ?: return@async show
+                val seasonsBody = getString("https://api.tvmaze.com/shows/$id/seasons")
+                val seasonCount = seasonsBody?.let {
+                    runCatching { JSONArray(it).length().takeIf { count -> count > 0 } }.getOrNull()
+                }
+                if (seasonCount != null) show.copy(seasonCount = seasonCount) else show
+            }
+        }.map { it.await() }
+    }
+
+    internal fun parseTrendingTvMazeJson(rawJson: String, limit: Int = 5): List<MediaSearchResult> {
+        return try {
+            val arr = JSONArray(rawJson)
+            val candidates = ArrayList<Pair<Double, MediaSearchResult>>(60)
+            for (i in 0 until arr.length()) {
+                val show = arr.optJSONObject(i) ?: continue
+                val rating = show.optJSONObject("rating")?.optDouble("average")?.takeIf { !it.isNaN() } ?: 0.0
+                val weight = show.optDouble("weight", 0.0).takeIf { !it.isNaN() } ?: 0.0
+                val status = show.optString("status")
+                val statusBoost = if (status.equals("Running", ignoreCase = true)) 15.0 else 0.0
+                if (rating < 8.0 && weight < 90.0) continue
+                val parsed = parseTvMazeShowSummary(show) ?: continue
+                candidates.add((weight + rating * 5.0 + statusBoost) to parsed)
+            }
+            candidates.sortedByDescending { it.first }.map { it.second }.take(limit)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun parseTvMazeShowSummary(show: JSONObject): MediaSearchResult? {
+        val tvMazeId = show.optInt("id", -1).takeIf { it > 0 } ?: return null
+        val name = show.optString("name").takeIf { it.isNotBlank() } ?: return null
+        val year = show.optString("premiered").take(4).toIntOrNull()
+        val genres = show.optJSONArray("genres")?.toStringList().orEmpty()
+        val runtime = show.optInt("averageRuntime", 0).takeIf { it > 0 }
+            ?: show.optInt("runtime", 0).takeIf { it > 0 }
+        val rating = show.optJSONObject("rating")?.optDouble("average")?.takeIf { !it.isNaN() && it > 0.0 }
+        val poster = show.optJSONObject("image")?.let { img ->
+            img.optString("medium").ifBlank { img.optString("original") }
+        }?.takeIf { it.startsWith("http") }
+        val imdbId = show.optJSONObject("externals")?.optString("imdb")?.takeIf { it.startsWith("tt") }
+        val summary = stripHtmlTags(show.optString("summary"))
+        val tvStatus = mapTvMazeStatus(show.optString("status"))
+        val officialSite = show.optString("officialSite").takeIf { FuzzyTitleMatcher.isSafeHttpUrl(it) }
+        val networkName = show.optJSONObject("network")?.optString("name")?.takeIf { it.isNotBlank() }
+            ?: show.optJSONObject("webChannel")?.optString("name")?.takeIf { it.isNotBlank() }
+        val tvMazePage = show.optString("url").takeIf { FuzzyTitleMatcher.isSafeHttpUrl(it) }
+        val providers = buildList {
+            if (officialSite != null) {
+                add(
+                    WatchProviderInfo(
+                        name = networkName ?: "Official Site",
+                        category = ProviderCategory.OFFICIAL_PAGE,
+                        url = officialSite,
+                    )
+                )
+            } else if (tvMazePage != null) {
+                add(
+                    WatchProviderInfo(
+                        name = networkName?.let { "$it (TVmaze)" } ?: "TVmaze",
+                        category = ProviderCategory.OFFICIAL_PAGE,
+                        url = tvMazePage,
+                    )
+                )
+            }
+        }
+        return MediaSearchResult(
+            id = imdbId?.let { "imdb:$it" } ?: "tvmaze:$tvMazeId",
+            mediaType = MediaType.TV,
+            title = name,
+            originalTitle = name,
+            releaseYear = year,
+            posterUrl = poster,
+            runtimeMinutes = runtime,
+            genres = genres,
+            imdbRating = rating,
+            overview = summary.takeIf { it.isNotBlank() },
+            imdbId = imdbId,
+            tvMazeId = tvMazeId,
+            tvReleaseStatus = tvStatus,
+            watchProviders = providers,
+            watchProvidersPageUrl = officialSite ?: tvMazePage,
+        )
+    }
+
+    fun fetchAppleTopMoviesFallback(limit: Int = 5): List<MediaSearchResult> {
+        val body = getString("https://itunes.apple.com/us/rss/topmovies/limit=10/json") ?: return emptyList()
+        return parseAppleTopMoviesRss(body, limit)
+    }
+
+    internal fun parseAppleTopMoviesRss(rawJson: String, limit: Int = 5): List<MediaSearchResult> {
+        return try {
+            val feed = JSONObject(rawJson).optJSONObject("feed") ?: return emptyList()
+            val entries = feed.optJSONArray("entry") ?: return emptyList()
+            buildList {
+                for (i in 0 until entries.length()) {
+                    if (size >= limit) break
+                    val entry = entries.optJSONObject(i) ?: continue
+                    val title = entry.optJSONObject("im:name")?.optString("label")
+                        ?.takeIf { it.isNotBlank() } ?: continue
+                    val idObj = entry.optJSONObject("id")
+                    val storeUrl = idObj?.optString("label")?.takeIf { FuzzyTitleMatcher.isSafeHttpUrl(it) }
+                    val appleId = idObj?.optJSONObject("attributes")?.optString("im:id")
+                        ?.takeIf { it.isNotBlank() } ?: "rank_$i"
+                    val images = entry.optJSONArray("im:image")
+                    val posterUrl = if (images != null && images.length() > 0) {
+                        images.optJSONObject(images.length() - 1)?.optString("label")
+                            ?.takeIf { FuzzyTitleMatcher.isSafeHttpUrl(it) }
+                            ?.replace("http://", "https://")
+                    } else {
+                        null
+                    }
+                    val rawDate = entry.optJSONObject("im:releaseDate")?.optString("label")
+                        ?.takeIf { it.isNotBlank() }
+                    val year = rawDate?.take(4)?.toIntOrNull()
+                    val genre = entry.optJSONObject("category")
+                        ?.optJSONObject("attributes")
+                        ?.optString("label")
+                        ?.takeIf { it.isNotBlank() }
+                    val summary = entry.optJSONObject("summary")?.optString("label")
+                        ?.takeIf { it.isNotBlank() }
+
+                    add(
+                        MediaSearchResult(
+                            id = "apple:$appleId",
+                            mediaType = MediaType.MOVIE,
+                            title = title,
+                            originalTitle = title,
+                            releaseYear = year,
+                            posterUrl = posterUrl,
+                            genres = listOfNotNull(genre),
+                            overview = summary,
+                            digitalReleaseStatus = DigitalReleaseStatus.CONFIRMED_DIGITAL,
+                            digitalReleaseDate = rawDate?.take(10),
+                            watchProviders = listOf(
+                                WatchProviderInfo(
+                                    name = "Apple TV",
+                                    category = ProviderCategory.RENTAL_PURCHASE,
+                                    url = storeUrl,
+                                    region = "US",
+                                )
+                            ),
+                            watchProvidersPageUrl = storeUrl,
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    internal fun mapTvMazeStatus(status: String?): TvReleaseStatus {
+        return when (status?.trim()?.lowercase()) {
+            "running" -> TvReleaseStatus.CURRENTLY_AIRING
+            "ended" -> TvReleaseStatus.ENDED
+            "in development", "to be determined" -> TvReleaseStatus.UPCOMING
+            else -> TvReleaseStatus.UNKNOWN
         }
     }
 
@@ -181,23 +327,61 @@ internal class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
      * and Persian synopses via fa.wikipedia.org without any API key.
      */
     fun resolvePersianQueryViaWikipedia(query: String): List<WikipediaBridgeHit> {
-        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return emptyList()
+        val normQuery = FuzzyTitleMatcher.normalizeText(trimmed)
+        val directHits = queryPersianWikipediaBridge(trimmed)
+        val hasCloseEnglishBridge = directHits.any { hit ->
+            !hit.englishTitle.isNullOrBlank() &&
+                FuzzyTitleMatcher.stringSimilarity(
+                    FuzzyTitleMatcher.normalizeText(cleanWikipediaTitle(hit.persianTitle.orEmpty())),
+                    normQuery,
+                ) >= 0.72
+        }
+        if (hasCloseEnglishBridge) {
+            return directHits
+        }
+        val fuzzyQuery = trimmed.split(Regex("\\s+"))
+            .filter { it.isNotBlank() }
+            .joinToString(" ") { token -> if (token.length >= 4) "$token~1" else token }
+        if (fuzzyQuery.isNotBlank() && fuzzyQuery != trimmed) {
+            val fuzzyHits = queryPersianWikipediaBridge(fuzzyQuery)
+            if (fuzzyHits.isNotEmpty()) {
+                return (fuzzyHits + directHits).distinctBy { it.persianTitle ?: it.englishTitle }
+            }
+        }
+        return directHits
+    }
+
+    private fun queryPersianWikipediaBridge(searchExpression: String): List<WikipediaBridgeHit> {
+        val encoded = URLEncoder.encode(searchExpression, "UTF-8")
         val searchBody = getString(
-            "https://fa.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded&format=json&utf8=1&srlimit=6"
+            "https://fa.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded&srinfo=suggestion&format=json&utf8=1&srlimit=6"
         ) ?: return emptyList()
 
         val pageTitles = try {
-            val arr = JSONObject(searchBody).optJSONObject("query")?.optJSONArray("search") ?: return emptyList()
-            val rawTitles = (0 until arr.length()).mapNotNull { idx ->
-                val item = arr.optJSONObject(idx) ?: return@mapNotNull null
-                val title = item.optString("title")
-                val snippet = item.optString("snippet")
-                val isMediaLikely = title.contains("فیلم") || title.contains("مجموعه") || title.contains("سریال") ||
-                    snippet.contains("فیلم") || snippet.contains("سریال") || snippet.contains("مجموعه تلویزیونی") ||
-                    snippet.contains("کارگردان")
-                (title to isMediaLikely)
+            val queryObj = JSONObject(searchBody).optJSONObject("query") ?: return emptyList()
+            val suggestion = queryObj.optJSONObject("searchinfo")?.optString("suggestion")
+                ?.takeIf { it.isNotBlank() }
+            val arr = queryObj.optJSONArray("search")
+            val rawTitles = if (arr != null) {
+                (0 until arr.length()).mapNotNull { idx ->
+                    val item = arr.optJSONObject(idx) ?: return@mapNotNull null
+                    val title = item.optString("title")
+                    val snippet = item.optString("snippet")
+                    val isMediaLikely = title.contains("فیلم") || title.contains("مجموعه") || title.contains("سریال") ||
+                        snippet.contains("فیلم") || snippet.contains("سریال") || snippet.contains("مجموعه تلویزیونی") ||
+                        snippet.contains("کارگردان")
+                    (title to isMediaLikely)
+                }
+            } else {
+                emptyList()
             }
-            rawTitles.sortedByDescending { it.second }.map { it.first }.take(4)
+            val prioritized = rawTitles.sortedByDescending { it.second }.map { it.first }.toMutableList()
+            if (suggestion != null && prioritized.none { it.equals(suggestion, ignoreCase = true) }) {
+                prioritized.add(0, suggestion)
+            }
+            prioritized.distinct().take(4)
         } catch (_: Exception) {
             emptyList()
         }

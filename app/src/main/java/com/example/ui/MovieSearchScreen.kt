@@ -23,18 +23,25 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.Tv
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -49,6 +56,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -68,11 +76,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.example.media.DigitalReleaseStatus
 import com.example.media.MediaSearchResult
 import com.example.media.MediaType
 import com.example.media.MovieDiscoveryState
+import com.example.media.ProviderCategory
 import com.example.media.SavedSourcePage
 import com.example.media.SourceSiteConfig
+import com.example.media.TvReleaseStatus
+import com.example.media.WatchProviderInfo
+import java.text.DateFormat
+import java.util.Date
 
 enum class SearchMediaTypeFilter {
     ALL,
@@ -93,6 +107,8 @@ fun MovieSearchScreen(
     onToggleFavorite: (MediaSearchResult) -> Unit,
     onOpenSavedPage: (SavedSourcePage) -> Unit,
     onOpenQuickSite: (SourceSiteConfig) -> Unit,
+    onRefreshTrending: () -> Unit = {},
+    onOpenProviderUrl: (url: String, title: String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val focusManager = LocalFocusManager.current
@@ -378,7 +394,139 @@ fun MovieSearchScreen(
                     }
                 }
             } else {
-                // Home Discover View: Favorites, Recently Viewed, Saved Sites, Quick Source Sites, Popular
+                // Home Discover View: Trending Movies & TV, Favorites, Recently Viewed, Quick Sites, Saved Sites, Popular
+                item(key = "trending_header") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.TrendingUp,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Text(
+                                    text = strings.discover.trendingSectionTitle,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onBackground,
+                                )
+                            }
+                            if (state.trendingFeed.lastUpdatedMillis > 0L) {
+                                val formattedTs = remember(state.trendingFeed.lastUpdatedMillis) {
+                                    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                                        .format(Date(state.trendingFeed.lastUpdatedMillis))
+                                }
+                                Text(
+                                    text = strings.discover.trendingLastUpdated(formattedTs),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        TextButton(
+                            onClick = onRefreshTrending,
+                            enabled = !state.isTrendingLoading,
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("trending_refresh_button"),
+                        ) {
+                            if (state.isTrendingLoading) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(strings.discover.trendingRefreshAction)
+                        }
+                    }
+                }
+
+                if (state.trendingFeed.isUsingFallbackSources) {
+                    item(key = "trending_fallback_notice") {
+                        Surface(
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("trending_fallback_notice"),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Info,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Text(
+                                    text = strings.discover.trendingFallbackNotice,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (state.isTrendingLoading &&
+                    state.trendingFeed.movies.isEmpty() &&
+                    state.trendingFeed.tvShows.isEmpty()
+                ) {
+                    item(key = "trending_loading") {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 18.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                        }
+                    }
+                }
+
+                if (state.trendingFeed.movies.isNotEmpty()) {
+                    item(key = "trending_movies_title") {
+                        SectionTitle(strings.discover.trendingMoviesTitle)
+                    }
+                    items(state.trendingFeed.movies, key = { "tr_mov_${it.id}" }) { item ->
+                        TrendingMediaCard(
+                            item = item,
+                            isFavorite = state.favorites.any { it.id == item.id },
+                            strings = strings,
+                            onClick = { onOpenDetails(item) },
+                            onToggleFavorite = { onToggleFavorite(item) },
+                            onOpenProviderUrl = onOpenProviderUrl,
+                        )
+                    }
+                }
+
+                if (state.trendingFeed.tvShows.isNotEmpty()) {
+                    item(key = "trending_tv_title") {
+                        SectionTitle(strings.discover.trendingTvTitle)
+                    }
+                    items(state.trendingFeed.tvShows, key = { "tr_tv_${it.id}" }) { item ->
+                        TrendingMediaCard(
+                            item = item,
+                            isFavorite = state.favorites.any { it.id == item.id },
+                            strings = strings,
+                            onClick = { onOpenDetails(item) },
+                            onToggleFavorite = { onToggleFavorite(item) },
+                            onOpenProviderUrl = onOpenProviderUrl,
+                        )
+                    }
+                }
+
                 if (state.favorites.isNotEmpty()) {
                     item(key = "favorites_section") {
                         SectionTitle(strings.discover.favoritesTitle)
@@ -733,6 +881,222 @@ fun MediaResultCard(
                     )
                 }
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun TrendingMediaCard(
+    item: MediaSearchResult,
+    isFavorite: Boolean,
+    strings: AppStrings,
+    onClick: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onOpenProviderUrl: (url: String, title: String) -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .testTag("trending_card_${item.id}"),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                PosterImage(
+                    posterUrl = item.posterUrl,
+                    mediaType = item.mediaType,
+                    contentDescription = item.title,
+                    modifier = Modifier
+                        .width(84.dp)
+                        .height(126.dp)
+                        .clip(RoundedCornerShape(10.dp)),
+                )
+
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = item.title,
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            val faTitle = item.persianTitle?.takeIf { !it.equals(item.title, ignoreCase = true) }
+                            if (faTitle != null) {
+                                Text(
+                                    text = faTitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+
+                        IconButton(
+                            onClick = onToggleFavorite,
+                            modifier = Modifier.minimumInteractiveComponentSize(),
+                        ) {
+                            Icon(
+                                imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                contentDescription = strings.discover.favoritesTitle,
+                                tint = if (isFavorite) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        item.releaseYear?.let { year ->
+                            Text(
+                                text = year.toString(),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        item.imdbRating?.let { rating ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Star,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Text(
+                                    text = String.format(java.util.Locale.US, "%.1f", rating),
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                )
+                            }
+                        }
+                        if (item.mediaType == MediaType.TV && item.seasonCount != null) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                            ) {
+                                Text(
+                                    text = strings.discover.labelSeasonsCount(item.seasonCount),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
+                    }
+
+                    val statusBadge = resolveTrendingStatusBadge(item, strings)
+                    if (statusBadge != null) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                        ) {
+                            Text(
+                                text = statusBadge,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            )
+                        }
+                    }
+
+                    if (item.genres.isNotEmpty()) {
+                        Text(
+                            text = item.genres.take(3).joinToString(" • "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+
+            if (item.watchProviders.isNotEmpty()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    item.watchProviders.take(4).forEach { provider ->
+                        val catLabel = when (provider.category) {
+                            ProviderCategory.STREAMING -> strings.discover.providerCatStreaming
+                            ProviderCategory.RENTAL_PURCHASE -> strings.discover.providerCatRentBuy
+                            ProviderCategory.FREE_AD_SUPPORTED -> strings.discover.providerCatFree
+                            ProviderCategory.OFFICIAL_PAGE -> strings.discover.providerCatOfficial
+                        }
+                        val targetUrl = provider.url ?: item.watchProvidersPageUrl
+                        AssistChip(
+                            onClick = {
+                                if (!targetUrl.isNullOrBlank()) {
+                                    onOpenProviderUrl(targetUrl, "${item.title} - ${provider.name}")
+                                } else {
+                                    onClick()
+                                }
+                            },
+                            label = {
+                                Text(
+                                    text = "${provider.name} • $catLabel",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                            trailingIcon = if (!targetUrl.isNullOrBlank()) {
+                                {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(13.dp),
+                                    )
+                                }
+                            } else null,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun resolveTrendingStatusBadge(item: MediaSearchResult, strings: AppStrings): String? {
+    return if (item.mediaType == MediaType.MOVIE) {
+        when (item.digitalReleaseStatus) {
+            DigitalReleaseStatus.CONFIRMED_DIGITAL ->
+                item.digitalReleaseDate?.let { strings.discover.statusDigitalReleasedOn(it) }
+                    ?: strings.discover.statusDigitalReleased
+            DigitalReleaseStatus.THEATRICAL_ONLY_OR_UNCONFIRMED -> strings.discover.statusTheatricalOnly
+            DigitalReleaseStatus.UNKNOWN -> null
+        }
+    } else {
+        when (item.tvReleaseStatus) {
+            TvReleaseStatus.CURRENTLY_AIRING -> strings.discover.statusTvAiring
+            TvReleaseStatus.SEASON_COMPLETED -> strings.discover.statusTvSeasonCompleted
+            TvReleaseStatus.UPCOMING -> strings.discover.statusTvUpcoming
+            TvReleaseStatus.ENDED -> strings.discover.statusTvEnded
+            TvReleaseStatus.UNKNOWN -> null
         }
     }
 }

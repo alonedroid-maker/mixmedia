@@ -53,6 +53,9 @@ data class MovieDiscoveryState(
     val searchResults: List<MediaSearchResult> = emptyList(),
     val popularFeed: List<MediaSearchResult> = emptyList(),
     val isPopularLoading: Boolean = false,
+    val trendingFeed: TrendingFeedBundle = TrendingFeedBundle(),
+    val isTrendingLoading: Boolean = false,
+    val trendingError: String? = null,
     val favorites: List<MediaSearchResult> = emptyList(),
     val recentlyViewed: List<MediaSearchResult> = emptyList(),
     val recentSearches: List<String> = emptyList(),
@@ -87,6 +90,7 @@ class MovieDiscoveryViewModel(
     private var searchJob: Job? = null
     private var detailsJob: Job? = null
     private var sourceJob: Job? = null
+    private var trendingJob: Job? = null
 
     fun initialize(context: Context) {
         if (persistence != null) return
@@ -95,9 +99,11 @@ class MovieDiscoveryViewModel(
         sourceEngine = SourceDiscoveryEngine(store)
 
         val prefs = store.loadPreferences()
+        val cachedTrending = store.loadTrendingCache()
         _state.update {
             it.copy(
                 preferences = prefs,
+                trendingFeed = cachedTrending ?: TrendingFeedBundle(),
                 favorites = store.loadFavorites(),
                 recentlyViewed = store.loadRecentlyViewed(),
                 recentSearches = store.loadRecentSearches(),
@@ -106,7 +112,44 @@ class MovieDiscoveryViewModel(
                 cacheSizeBytes = store.getCacheSizeBytes(),
             )
         }
+        loadTrendingIfNeeded()
         loadPopularFeedIfEmpty()
+    }
+
+    fun loadTrendingIfNeeded(forceRefresh: Boolean = false) {
+        if (_state.value.isTrendingLoading && !forceRefresh) return
+        trendingJob?.cancel()
+        trendingJob = viewModelScope.launch {
+            _state.update { it.copy(isTrendingLoading = true, trendingError = null) }
+            try {
+                val bundle = metadataRepo.getTrendingFeed(
+                    preferences = _state.value.preferences,
+                    persistence = persistence,
+                    forceRefresh = forceRefresh,
+                )
+                _state.update {
+                    it.copy(
+                        trendingFeed = if (bundle.movies.isNotEmpty() || bundle.tvShows.isNotEmpty()) bundle else it.trendingFeed,
+                        isTrendingLoading = false,
+                        trendingError = null,
+                        cacheSizeBytes = persistence?.getCacheSizeBytes() ?: it.cacheSizeBytes,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(
+                        isTrendingLoading = false,
+                        trendingError = e.message ?: "Unable to load trending titles",
+                    )
+                }
+            }
+        }
+    }
+
+    fun refreshTrending() {
+        loadTrendingIfNeeded(forceRefresh = true)
     }
 
     fun loadPopularFeedIfEmpty() {
@@ -394,10 +437,14 @@ class MovieDiscoveryViewModel(
     }
 
     fun updatePreferences(transform: (MediaPreferences) -> MediaPreferences) {
-        val updated = transform(_state.value.preferences)
+        val previous = _state.value.preferences
+        val updated = transform(previous)
         _state.update { it.copy(preferences = updated) }
         persistence?.savePreferences(updated)
         metadataRepo.clearMemoryCaches()
+        if (previous.tmdbApiKey != updated.tmdbApiKey || previous.searchLanguage != updated.searchLanguage) {
+            loadTrendingIfNeeded(forceRefresh = true)
+        }
     }
 
     fun toggleSourceSiteEnabled(siteId: String, enabled: Boolean) {

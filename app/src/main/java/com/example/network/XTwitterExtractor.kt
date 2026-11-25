@@ -76,7 +76,7 @@ class XTwitterExtractor(
         }
 
         fun extractStatusReference(rawUrl: String): XStatusReference? {
-            val trimmed = rawUrl.trim()
+            val trimmed = rawUrl.trim().trimEnd('\'', '"', ',', ';', '.', '!', ')', ']')
             if (trimmed.isEmpty()) return null
             val httpUrl = normalizeScheme(trimmed).toHttpUrlOrNull() ?: return null
             val host = httpUrl.host.lowercase(Locale.US)

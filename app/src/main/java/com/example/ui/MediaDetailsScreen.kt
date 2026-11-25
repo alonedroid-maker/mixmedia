@@ -28,14 +28,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -67,11 +71,14 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.media.DetailsUiState
+import com.example.media.DigitalReleaseStatus
 import com.example.media.MediaDetails
 import com.example.media.MediaSearchResult
 import com.example.media.MediaType
+import com.example.media.ProviderCategory
 import com.example.media.SeasonInfo
 import com.example.media.SourceSearchTarget
+import com.example.media.TvReleaseStatus
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -86,6 +93,7 @@ fun MediaDetailsScreen(
     onSearchSources: (SourceSearchTarget) -> Unit,
     onOpenUrl: (String, String) -> Unit,
     onShareMedia: (String) -> Unit,
+    onDownloadAuthorizedUrl: (url: String, fileName: String?) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val details = (detailsState as? DetailsUiState.Success)?.details
@@ -347,6 +355,21 @@ fun MediaDetailsScreen(
                                         color = MaterialTheme.colorScheme.secondary,
                                     )
                                 }
+
+                                val releaseBadge = resolveDetailsReleaseBadge(activeSummary, strings)
+                                if (releaseBadge != null) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                    ) {
+                                        Text(
+                                            text = releaseBadge,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -413,6 +436,123 @@ fun MediaDetailsScreen(
                                 Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(strings.discover.detailsOpenTmdb)
+                            }
+                        }
+                    }
+
+                    val authorizedUrl = details?.authorizedDirectDownloadUrl ?: summary.authorizedDirectDownloadUrl
+                    if (!authorizedUrl.isNullOrBlank()) {
+                        Button(
+                            onClick = { onDownloadAuthorizedUrl(authorizedUrl, "${activeSummary.title}.mp4") },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondary,
+                                contentColor = MaterialTheme.colorScheme.onSecondary,
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("details_authorized_download_button"),
+                            shape = MaterialTheme.shapes.medium,
+                        ) {
+                            Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(strings.discover.authorizedDirectDownloadAction)
+                        }
+                    }
+                }
+            }
+
+            // Where to Watch (Official Legal Providers — never labeled as Direct Download)
+            item(key = "details_where_to_watch") {
+                val providers = details?.watchProviders ?: summary.watchProviders
+                val pageUrl = details?.watchProvidersPageUrl ?: summary.watchProvidersPageUrl
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("details_where_to_watch_card"),
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.LiveTv,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                                Text(
+                                    text = strings.discover.whereToWatchTitle,
+                                    style = MaterialTheme.typography.titleSmall,
+                                )
+                            }
+                            if (!pageUrl.isNullOrBlank()) {
+                                TextButton(
+                                    onClick = { onOpenUrl(pageUrl, "${activeSummary.title} - ${strings.discover.whereToWatchTitle}") },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                ) {
+                                    Text(strings.discover.whereToWatchOpenAll)
+                                }
+                            }
+                        }
+
+                        if (providers.isEmpty()) {
+                            Text(
+                                text = strings.discover.noVerifiedProviders,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                providers.forEach { provider ->
+                                    val categoryLabel = when (provider.category) {
+                                        ProviderCategory.STREAMING -> strings.discover.providerCatStreaming
+                                        ProviderCategory.RENTAL_PURCHASE -> strings.discover.providerCatRentBuy
+                                        ProviderCategory.FREE_AD_SUPPORTED -> strings.discover.providerCatFree
+                                        ProviderCategory.OFFICIAL_PAGE -> strings.discover.providerCatOfficial
+                                    }
+                                    val target = provider.url ?: pageUrl
+                                    AssistChip(
+                                        onClick = {
+                                            if (!target.isNullOrBlank()) {
+                                                onOpenUrl(target, "${activeSummary.title} - ${provider.name}")
+                                            }
+                                        },
+                                        enabled = !target.isNullOrBlank(),
+                                        label = {
+                                            Text(
+                                                text = "${provider.name} ($categoryLabel)",
+                                                style = MaterialTheme.typography.labelMedium,
+                                            )
+                                        },
+                                        trailingIcon = if (!target.isNullOrBlank()) {
+                                            {
+                                                Icon(
+                                                    imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(14.dp),
+                                                )
+                                            }
+                                        } else null,
+                                    )
+                                }
                             }
                         }
                     }
@@ -741,6 +881,26 @@ private fun SeasonAccordionCard(
                     }
                 }
             }
+        }
+    }
+}
+
+private fun resolveDetailsReleaseBadge(summary: MediaSearchResult, strings: AppStrings): String? {
+    return if (summary.mediaType == MediaType.MOVIE) {
+        when (summary.digitalReleaseStatus) {
+            DigitalReleaseStatus.CONFIRMED_DIGITAL ->
+                summary.digitalReleaseDate?.let { strings.discover.statusDigitalReleasedOn(it) }
+                    ?: strings.discover.statusDigitalReleased
+            DigitalReleaseStatus.THEATRICAL_ONLY_OR_UNCONFIRMED -> strings.discover.statusTheatricalOnly
+            DigitalReleaseStatus.UNKNOWN -> null
+        }
+    } else {
+        when (summary.tvReleaseStatus) {
+            TvReleaseStatus.CURRENTLY_AIRING -> strings.discover.statusTvAiring
+            TvReleaseStatus.SEASON_COMPLETED -> strings.discover.statusTvSeasonCompleted
+            TvReleaseStatus.UPCOMING -> strings.discover.statusTvUpcoming
+            TvReleaseStatus.ENDED -> strings.discover.statusTvEnded
+            TvReleaseStatus.UNKNOWN -> null
         }
     }
 }

@@ -16,7 +16,7 @@ import com.example.network.XExtractionError
 import com.example.network.XExtractionException
 import com.example.network.XTwitterExtractor
 import com.example.network.XVideoVariant
-import com.example.network.YouTubeStreamOption
+import com.example.network.YouTubeUnavailableException
 import com.example.security.DeveloperAccessVerifier
 import com.example.ui.theme.ThemeMode
 import java.io.IOException
@@ -72,6 +72,7 @@ enum class ErrorType {
     INVALID_URL,
     NO_VIDEO_FOUND,
     YOUTUBE_UNSUPPORTED,
+    YOUTUBE_UNAVAILABLE,
     INSTAGRAM_UNSUPPORTED,
     X_INVALID_URL,
     X_NO_VIDEO,
@@ -103,7 +104,7 @@ data class LinkExtractorScreenState(
     val detectedClipboardUrl: String? = null,
     val sessionHistory: List<CurlResolutionResult> = emptyList(),
     val updateCheckState: UpdateCheckState = UpdateCheckState.Idle,
-    val pendingYouTubeResult: CurlResolutionResult? = null,
+    val youtubeApiKey: String = "",
     val pendingXResult: CurlResolutionResult? = null,
 )
 
@@ -171,6 +172,10 @@ class LinkExtractorViewModel(
 
     fun setThemeMode(themeMode: ThemeMode) {
         _screenState.update { it.copy(themeMode = themeMode) }
+    }
+
+    fun setYouTubeApiKey(apiKey: String) {
+        _screenState.update { it.copy(youtubeApiKey = apiKey.trim()) }
     }
 
     fun navigateTo(destination: AppDestination) {
@@ -266,7 +271,6 @@ class LinkExtractorViewModel(
                 inputText = "",
                 capturedFromExternalIntent = false,
                 uiState = ExtractorUiState.Idle,
-                pendingYouTubeResult = null,
                 pendingXResult = null,
             )
         }
@@ -314,34 +318,6 @@ class LinkExtractorViewModel(
         )
     }
 
-    fun selectYouTubeOption(option: YouTubeStreamOption): CurlResolutionResult? {
-        val baseResult = _screenState.value.pendingYouTubeResult
-            ?: (_screenState.value.uiState as? ExtractorUiState.Success)?.result
-            ?: return null
-
-        val updated = baseResult.copy(
-            directVideoUrl = option.url,
-            filename = option.suggestedFileName,
-            extension = option.container,
-            fileSizeFormatted = option.fileSizeFormatted,
-            customUserAgent = option.userAgent,
-        )
-        addSuccessResult(updated)
-        _screenState.update { it.copy(pendingYouTubeResult = null) }
-        return updated
-    }
-
-    fun openYouTubeFormatPicker() {
-        val current = (_screenState.value.uiState as? ExtractorUiState.Success)?.result ?: return
-        if (current.youtubeOptions.isNotEmpty()) {
-            _screenState.update { it.copy(pendingYouTubeResult = current) }
-        }
-    }
-
-    fun dismissYouTubeFormatPicker() {
-        _screenState.update { it.copy(pendingYouTubeResult = null) }
-    }
-
     fun selectXVariantOption(variant: XVideoVariant): CurlResolutionResult? {
         val baseResult = _screenState.value.pendingXResult
             ?: (_screenState.value.uiState as? ExtractorUiState.Success)?.result
@@ -369,13 +345,12 @@ class LinkExtractorViewModel(
         _screenState.update { it.copy(pendingXResult = null) }
     }
 
-    fun executeExtraction(cookieHeader: String? = null) {
+    fun executeExtraction(cookieHeader: String? = null, youtubeApiKey: String? = null) {
         val rawInput = _screenState.value.inputText.trim()
         if (rawInput.isEmpty()) {
             _screenState.update {
                 it.copy(
                     uiState = ExtractorUiState.Error(ErrorType.EMPTY_URL),
-                    pendingYouTubeResult = null,
                     pendingXResult = null,
                 )
             }
@@ -409,18 +384,19 @@ class LinkExtractorViewModel(
             _screenState.update {
                 it.copy(
                     uiState = ExtractorUiState.Error(ErrorType.INVALID_URL),
-                    pendingYouTubeResult = null,
                     pendingXResult = null,
                 )
             }
             return
         }
 
+        val effectiveYoutubeKey = youtubeApiKey?.trim()?.takeIf { it.isNotEmpty() }
+            ?: _screenState.value.youtubeApiKey.takeIf { it.isNotBlank() }
+
         activeJob?.cancel()
         activeJob = viewModelScope.launch {
             _screenState.update {
                 it.copy(
-                    pendingYouTubeResult = null,
                     pendingXResult = null,
                     uiState = ExtractorUiState.Loading(
                         liveLog = "$ curl -L -v \"$extractedUrl\"\n",
@@ -433,6 +409,7 @@ class LinkExtractorViewModel(
                 val result = resolver.resolve(
                     inputUrl = extractedUrl,
                     cookieHeader = cookieHeader,
+                    youtubeApiKey = effectiveYoutubeKey,
                 ) { traceSoFar, hop ->
                     _screenState.update { current ->
                         if (current.uiState is ExtractorUiState.Loading) {
@@ -448,11 +425,8 @@ class LinkExtractorViewModel(
                     }
                 }
 
-                if (result.directVideoUrl != null) {
+                if (result.directVideoUrl != null || result.youtubeInfo != null) {
                     addSuccessResult(result)
-                    if (result.youtubeOptions.isNotEmpty()) {
-                        _screenState.update { it.copy(pendingYouTubeResult = result) }
-                    }
                 } else {
                     _screenState.update {
                         it.copy(
@@ -466,6 +440,16 @@ class LinkExtractorViewModel(
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: YouTubeUnavailableException) {
+                _screenState.update {
+                    it.copy(
+                        uiState = ExtractorUiState.Error(
+                            errorType = ErrorType.YOUTUBE_UNAVAILABLE,
+                            verboseLog = e.verboseLog,
+                        ),
+                        isLogExpanded = it.isDeveloperMode,
+                    )
+                }
             } catch (e: UnsupportedPlatformException) {
                 val errType = when (e.platform) {
                     SocialPlatform.YOUTUBE -> ErrorType.YOUTUBE_UNSUPPORTED
@@ -532,9 +516,10 @@ class LinkExtractorViewModel(
     }
 
     private fun addSuccessResult(result: CurlResolutionResult) {
+        val resultIdentity = result.directVideoUrl ?: result.youtubeInfo?.canonicalUrl ?: result.sourceUrl
         _screenState.update { state ->
             val updatedHistory = (listOf(result) + state.sessionHistory.filterNot {
-                it.directVideoUrl == result.directVideoUrl
+                (it.directVideoUrl ?: it.youtubeInfo?.canonicalUrl ?: it.sourceUrl) == resultIdentity
             }).take(10)
             state.copy(
                 uiState = ExtractorUiState.Success(result),

@@ -1,666 +1,373 @@
 package com.example.network
 
+import java.io.IOException
+import java.net.URLEncoder
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
 import org.json.JSONObject
 
-data class YouTubeExtractionResult(
-    val videoId: String,
-    val title: String,
-    val author: String?,
-    val durationSeconds: Long?,
-    val options: List<YouTubeStreamOption>,
-    val hops: List<RedirectHop>,
-    val verboseLog: String,
-)
-
+/**
+ * Policy-compliant YouTube handler.
+ *
+ * Uses only official YouTube URLs, the public YouTube oEmbed endpoint, and the official
+ * YouTube Data API v3 (`videos?part=snippet,contentDetails`) when the user provides a key
+ * in Settings. Never scrapes watch HTML or calls unauthorized streaming endpoints.
+ */
 class YouTubeExtractor(
     private val client: OkHttpClient = defaultClient(),
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
-    private data class InnerTubeClientSpec(
-        val label: String,
-        val clientId: String,
-        val clientName: String,
-        val clientVersion: String,
-        val userAgent: String,
-        val extraContext: Map<String, Any>,
-        val thirdPartyEmbedUrl: String? = null,
-    )
 
     companion object {
-        private val YOUTUBE_ID_REGEX = Regex(
-            """(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|embed/|live/|v/)|youtu\.be/)([A-Za-z0-9_-]{11})""",
-            RegexOption.IGNORE_CASE
+        val SUPPORTED_HOSTS = setOf(
+            "youtube.com",
+            "www.youtube.com",
+            "m.youtube.com",
+            "music.youtube.com",
+            "youtu.be",
+            "www.youtu.be",
+            "youtube-nocookie.com",
+            "www.youtube-nocookie.com",
         )
 
-        private val API_KEY_REGEX = Regex(""""INNERTUBE_API_KEY"\s*:\s*"([^"]+)"""")
-        private val VISITOR_DATA_REGEX = Regex(""""visitorData"\s*:\s*"([^"]+)"""")
-        private val PLAYER_BASE_URL = "https://www.youtube.com/youtubei/v1/player"
-        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
-        private const val WEB_USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+        const val YOUTUBE_STUDIO_URL = "https://studio.youtube.com/"
+        const val GOOGLE_TAKEOUT_URL = "https://takeout.google.com/"
 
-        private val CLIENTS = listOf(
-            InnerTubeClientSpec(
-                label = "ANDROID_VR",
-                clientId = "28",
-                clientName = "ANDROID_VR",
-                clientVersion = "1.65.10",
-                userAgent = "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-                extraContext = mapOf(
-                    "deviceMake" to "Oculus",
-                    "deviceModel" to "Quest 3",
-                    "osName" to "Android",
-                    "osVersion" to "12L",
-                    "androidSdkVersion" to 32,
-                ),
-            ),
-            InnerTubeClientSpec(
-                label = "IOS",
-                clientId = "5",
-                clientName = "IOS",
-                clientVersion = "20.10.4",
-                userAgent = "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
-                extraContext = mapOf(
-                    "deviceMake" to "Apple",
-                    "deviceModel" to "iPhone16,2",
-                    "osName" to "iPhone",
-                    "osVersion" to "18.3.2.22D82",
-                ),
-            ),
-            InnerTubeClientSpec(
-                label = "ANDROID",
-                clientId = "3",
-                clientName = "ANDROID",
-                clientVersion = "20.10.38",
-                userAgent = "com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip",
-                extraContext = mapOf(
-                    "osName" to "Android",
-                    "osVersion" to "14",
-                    "androidSdkVersion" to 34,
-                ),
-            ),
-        )
+        private val VIDEO_ID_PATTERN = Regex("""^[A-Za-z0-9_-]{11}$""")
+        private val PATH_PREFIX_SEGMENTS = setOf("shorts", "live", "embed", "v")
+        private val ISO_DURATION_REGEX = Regex("""^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$""")
+        private const val USER_AGENT = "MediaXAndroid/1.5 (+https://github.com/alonedroid-maker/mixmedia)"
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .followRedirects(true)
             .followSslRedirects(true)
-            .connectTimeout(14, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(12, TimeUnit.SECONDS)
+            .readTimeout(16, TimeUnit.SECONDS)
             .build()
 
-        fun isYouTubeUrl(url: String): Boolean = extractVideoId(url) != null
+        fun isYouTubeUrl(rawUrl: String): Boolean = extractVideoId(rawUrl) != null
 
-        fun extractVideoId(url: String): String? {
-            return YOUTUBE_ID_REGEX.find(url)?.groupValues?.getOrNull(1)
+        fun canonicalWatchUrl(videoId: String): String =
+            "https://www.youtube.com/watch?v=$videoId"
+
+        fun defaultThumbnailUrl(videoId: String): String =
+            "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
+
+        fun extractVideoId(rawUrl: String): String? {
+            val cleaned = rawUrl.trim().trimEnd('\'', '"', ',', ';', '.', '!', ')', ']')
+            if (cleaned.isEmpty()) return null
+            val normalized = normalizeScheme(cleaned)
+            val httpUrl = normalized.toHttpUrlOrNull() ?: return null
+            val host = httpUrl.host.lowercase(Locale.US)
+            if (host !in SUPPORTED_HOSTS) return null
+
+            val segments = httpUrl.pathSegments.filter { it.isNotBlank() }
+            if (host == "youtu.be" || host == "www.youtu.be") {
+                val candidate = segments.firstOrNull() ?: return null
+                return candidate.takeIf { VIDEO_ID_PATTERN.matches(it) }
+            }
+
+            if (segments.isEmpty() || segments.first().equals("watch", ignoreCase = true)) {
+                val vParam = httpUrl.queryParameter("v")?.trim()
+                if (!vParam.isNullOrBlank() && VIDEO_ID_PATTERN.matches(vParam)) {
+                    return vParam
+                }
+            }
+
+            if (segments.size >= 2 && segments[0].lowercase(Locale.US) in PATH_PREFIX_SEGMENTS) {
+                val candidate = segments[1].trim()
+                if (VIDEO_ID_PATTERN.matches(candidate)) {
+                    return candidate
+                }
+            }
+            return null
+        }
+
+        internal fun parseIso8601DurationSeconds(raw: String?): Long? {
+            val trimmed = raw?.trim()?.uppercase(Locale.US) ?: return null
+            val match = ISO_DURATION_REGEX.matchEntire(trimmed) ?: return null
+            val hours = match.groupValues.getOrNull(1)?.toLongOrNull() ?: 0L
+            val minutes = match.groupValues.getOrNull(2)?.toLongOrNull() ?: 0L
+            val seconds = match.groupValues.getOrNull(3)?.toLongOrNull() ?: 0L
+            val total = hours * 3600L + minutes * 60L + seconds
+            return total.takeIf { it > 0L }
+        }
+
+        private fun normalizeScheme(raw: String): String {
+            return if (raw.startsWith("http://", ignoreCase = true) ||
+                raw.startsWith("https://", ignoreCase = true)
+            ) {
+                raw
+            } else if (SUPPORTED_HOSTS.any { raw.startsWith("$it/", ignoreCase = true) }) {
+                "https://$raw"
+            } else {
+                raw
+            }
         }
     }
 
-    suspend fun extract(
+    suspend fun fetchMetadata(
         inputUrl: String,
-        cookieHeader: String? = null,
+        youtubeApiKey: String? = null,
         onLogUpdate: (traceSoFar: String, currentStep: Int) -> Unit = { _, _ -> },
-    ): YouTubeExtractionResult = withContext(Dispatchers.IO) {
+    ): YouTubeMetadataInfo = withContext(ioDispatcher) {
         val videoId = extractVideoId(inputUrl)
             ?: throw IllegalArgumentException("Invalid YouTube URL")
+        val canonical = canonicalWatchUrl(videoId)
+        val trimmedApiKey = youtubeApiKey?.trim().orEmpty()
 
         val log = StringBuilder()
         val hops = mutableListOf<RedirectHop>()
         var step = 0
-        var sawExplicitBotGate = false
 
         fun trace(msg: String) {
             log.appendLine(msg)
         }
 
-        trace("[YouTube] Target videoId=$videoId")
-        if (!cookieHeader.isNullOrBlank()) {
-            trace("[YouTube] Using verified session cookies (${cookieHeader.length} chars)")
-        }
+        trace("[YouTube] Official lookup videoId=$videoId canonical=$canonical")
         onLogUpdate(log.toString(), 1)
 
-        var bestTitle: String? = null
-        var bestAuthor: String? = null
-        var bestDuration: Long? = null
-        var apiKey: String? = null
-        var visitorData: String? = null
-        val collectedOptions = mutableListOf<YouTubeStreamOption>()
+        var title: String? = null
+        var channelTitle: String? = null
+        var channelUrl: String? = null
+        var thumbnailUrl: String? = null
+        var durationSeconds: Long? = null
+        var publishedAt: String? = null
+        var unavailableByStatus = false
+        var unavailableReason: String? = null
+        var hadSuccessfulHttpResponse = false
+        var lastIoException: IOException? = null
 
-        // 0. Fast metadata via oEmbed (title + author)
-        runCatching {
-            val oembedUrl = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json"
-            client.newCall(Request.Builder().url(oembedUrl).get().build()).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val oj = JSONObject(resp.body?.string().orEmpty())
-                    bestTitle = oj.optString("title").takeIf { it.isNotBlank() }
-                    bestAuthor = oj.optString("author_name").takeIf { it.isNotBlank() }
-                    trace("* oEmbed metadata: title=\"$bestTitle\" author=\"$bestAuthor\"")
-                }
-            }
-        }
-
-        // 1. Fetch Watch page for apiKey, visitorData, and optional direct ytInitialPlayerResponse
+        // Step 1: Official public YouTube oEmbed metadata endpoint
         currentCoroutineContext().ensureActive()
         step++
-        val watchUrl = "https://www.youtube.com/watch?v=$videoId"
-        trace("> GET $watchUrl")
+        val encodedWatch = URLEncoder.encode(canonical, "UTF-8")
+        val oembedUrl = "https://www.youtube.com/oembed?url=$encodedWatch&format=json"
+        trace("> GET $oembedUrl")
         onLogUpdate(log.toString(), step)
 
-        runCatching {
-            val reqBuilder = Request.Builder()
-                .url(watchUrl)
+        try {
+            val req = Request.Builder()
+                .url(oembedUrl)
                 .get()
-                .header("User-Agent", WEB_USER_AGENT)
-                .header("Accept-Language", "en-US,en;q=0.9")
-            if (!cookieHeader.isNullOrBlank()) {
-                reqBuilder.header("Cookie", cookieHeader)
-            }
-            client.newCall(reqBuilder.build()).execute().use { resp ->
-                val html = resp.body?.string().orEmpty()
-                trace("< HTTP ${resp.code} (${html.length} bytes)")
-                hops.add(RedirectHop(step, watchUrl, resp.code, resp.message, null, resp.header("Content-Type"), html.length.toLong()))
-
-                apiKey = API_KEY_REGEX.find(html)?.groupValues?.getOrNull(1)
-                visitorData = VISITOR_DATA_REGEX.find(html)?.groupValues?.getOrNull(1)
-
-                extractJsonAfterMarker(html, "ytInitialPlayerResponse = ")?.let { playerJson ->
-                    val playStatus = playerJson.optJSONObject("playabilityStatus")?.optString("status").orEmpty()
-                    val reason = playerJson.optJSONObject("playabilityStatus")?.optString("reason").orEmpty()
-                    if (playStatus.equals("LOGIN_REQUIRED", ignoreCase = true) ||
-                        reason.contains("not a bot", ignoreCase = true)
-                    ) {
-                        sawExplicitBotGate = true
-                        trace("* Watch playabilityStatus=$playStatus ($reason)")
+                .header("User-Agent", USER_AGENT)
+                .header("Accept", "application/json")
+                .build()
+            client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                trace("< HTTP ${resp.code} (${body.length} bytes)")
+                hops.add(
+                    RedirectHop(
+                        step = step,
+                        requestUrl = oembedUrl,
+                        statusCode = resp.code,
+                        statusMessage = resp.message,
+                        locationHeader = null,
+                        contentType = resp.header("Content-Type"),
+                        contentLength = body.length.toLong(),
+                    )
+                )
+                hadSuccessfulHttpResponse = true
+                when {
+                    resp.isSuccessful && body.isNotBlank() -> {
+                        val parsed = parseOEmbedJson(body, videoId, canonical)
+                        if (parsed != null) {
+                            title = parsed.title
+                            channelTitle = parsed.channelTitle
+                            channelUrl = parsed.channelUrl
+                            thumbnailUrl = parsed.thumbnailUrl
+                            unavailableByStatus = false
+                        }
                     }
-                    val parsed = parsePlayerJson(playerJson, videoId, WEB_USER_AGENT)
-                    if (parsed.title != null && bestTitle == null) bestTitle = parsed.title
-                    if (parsed.author != null && bestAuthor == null) bestAuthor = parsed.author
-                    if (parsed.durationSeconds != null && bestDuration == null) bestDuration = parsed.durationSeconds
-                    if (parsed.options.isNotEmpty() && isStreamUrlReachable(parsed.options.first())) {
-                        collectedOptions.addAll(parsed.options)
-                        trace("* Watch HTML yielded ${parsed.options.size} verified direct streams.")
+                    resp.code in setOf(400, 401, 403, 404, 410) -> {
+                        unavailableByStatus = true
+                        unavailableReason = "HTTP ${resp.code}"
                     }
                 }
             }
-        }.onFailure { if (it is CancellationException) throw it else trace("* Watch fetch error: ${it.message}") }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            lastIoException = e
+            trace("* oEmbed IO error: ${e.message}")
+        } catch (e: Exception) {
+            trace("* oEmbed parse error: ${e.message}")
+        }
 
-        // 2. Try native InnerTube clients with extracted apiKey & visitorData
-        if (collectedOptions.isEmpty()) {
-            val playerEndpoint = if (!apiKey.isNullOrBlank()) {
-                "$PLAYER_BASE_URL?key=$apiKey&prettyPrint=false"
-            } else {
-                "$PLAYER_BASE_URL?prettyPrint=false"
-            }
+        // Step 2: Optional Official YouTube Data API v3 (`videos?part=snippet,contentDetails`)
+        if (trimmedApiKey.isNotEmpty()) {
+            currentCoroutineContext().ensureActive()
+            step++
+            val safeLoggedUrl =
+                "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=$videoId&key=***"
+            val requestUrl =
+                "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=$videoId&key=${URLEncoder.encode(trimmedApiKey, "UTF-8")}"
+            trace("> GET $safeLoggedUrl")
+            onLogUpdate(log.toString(), step)
 
-            for (spec in CLIENTS) {
-                currentCoroutineContext().ensureActive()
-                step++
-                trace("> POST $PLAYER_BASE_URL [client=${spec.label}]")
-                onLogUpdate(log.toString(), step)
-
-                val payload = buildInnerTubePayload(videoId, spec, visitorData)
-                val reqBuilder = Request.Builder()
-                    .url(playerEndpoint)
-                    .post(payload.toRequestBody(JSON_MEDIA_TYPE))
-                    .header("Content-Type", "application/json")
-                    .header("User-Agent", spec.userAgent)
-                    .header("Origin", "https://www.youtube.com")
-                    .header("X-YouTube-Client-Name", spec.clientId)
-                    .header("X-YouTube-Client-Version", spec.clientVersion)
-
-                if (!visitorData.isNullOrBlank()) {
-                    reqBuilder.header("X-Goog-Visitor-Id", visitorData!!)
-                }
-                if (!cookieHeader.isNullOrBlank()) {
-                    reqBuilder.header("Cookie", cookieHeader)
-                }
-
-                try {
-                    client.newCall(reqBuilder.build()).execute().use { resp ->
-                        val status = resp.code
-                        val body = resp.body?.string().orEmpty()
-                        trace("< HTTP $status (${body.length} bytes)")
-                        hops.add(
-                            RedirectHop(
-                                step = step,
-                                requestUrl = "$PLAYER_BASE_URL (${spec.label})",
-                                statusCode = status,
-                                statusMessage = resp.message,
-                                locationHeader = null,
-                                contentType = resp.header("Content-Type"),
-                                contentLength = body.length.toLong(),
-                            )
+            try {
+                val req = Request.Builder()
+                    .url(requestUrl)
+                    .get()
+                    .header("User-Agent", USER_AGENT)
+                    .header("Accept", "application/json")
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    val body = resp.body?.string().orEmpty()
+                    trace("< HTTP ${resp.code} (${body.length} bytes)")
+                    hops.add(
+                        RedirectHop(
+                            step = step,
+                            requestUrl = safeLoggedUrl,
+                            statusCode = resp.code,
+                            statusMessage = resp.message,
+                            locationHeader = null,
+                            contentType = resp.header("Content-Type"),
+                            contentLength = body.length.toLong(),
                         )
-
-                        if (resp.isSuccessful && body.isNotBlank()) {
-                            val json = runCatching { JSONObject(body) }.getOrNull()
-                            if (json != null) {
-                                val playStatus = json.optJSONObject("playabilityStatus")?.optString("status").orEmpty()
-                                val reason = json.optJSONObject("playabilityStatus")?.optString("reason").orEmpty()
-                                trace("* playabilityStatus=$playStatus ${if (reason.isNotBlank()) "($reason)" else ""}")
-
-                                if (playStatus.equals("LOGIN_REQUIRED", ignoreCase = true) ||
-                                    reason.contains("not a bot", ignoreCase = true)
-                                ) {
-                                    sawExplicitBotGate = true
-                                }
-
-                                val parsed = parsePlayerJson(json, videoId, spec.userAgent)
-                                if (parsed.title != null && bestTitle == null) bestTitle = parsed.title
-                                if (parsed.author != null && bestAuthor == null) bestAuthor = parsed.author
-                                if (parsed.durationSeconds != null && bestDuration == null) bestDuration = parsed.durationSeconds
-
-                                if (parsed.options.isNotEmpty() && isStreamUrlReachable(parsed.options.first())) {
-                                    trace("* Verified ${parsed.options.size} direct streams from ${spec.label}")
-                                    collectedOptions.addAll(parsed.options)
-                                }
+                    )
+                    hadSuccessfulHttpResponse = true
+                    if (resp.isSuccessful && body.isNotBlank()) {
+                        val dataParsed = parseDataApiJson(body, videoId, canonical)
+                        if (dataParsed != null) {
+                            if (!dataParsed.isAvailable) {
+                                unavailableByStatus = true
+                                unavailableReason = dataParsed.unavailableReason
+                            } else {
+                                unavailableByStatus = false
+                                title = dataParsed.title.takeIf { it.isNotBlank() } ?: title
+                                channelTitle = dataParsed.channelTitle ?: channelTitle
+                                channelUrl = dataParsed.channelUrl ?: channelUrl
+                                thumbnailUrl = dataParsed.thumbnailUrl ?: thumbnailUrl
+                                durationSeconds = dataParsed.durationSeconds ?: durationSeconds
+                                publishedAt = dataParsed.publishedAt ?: publishedAt
                             }
                         }
                     }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    trace("* ${spec.label} failed: ${e.message}")
                 }
-
-                onLogUpdate(log.toString(), step)
-
-                val hasMuxed = collectedOptions.any { it.category == MediaFormatCategory.VIDEO_WITH_AUDIO }
-                val hasAudio = collectedOptions.any { it.category == MediaFormatCategory.AUDIO_ONLY }
-                if (hasMuxed && hasAudio) break
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IOException) {
+                lastIoException = e
+                trace("* YouTube Data API IO error: ${e.message}")
+            } catch (e: Exception) {
+                trace("* YouTube Data API parse error: ${e.message}")
             }
         }
 
-        val finalOptions = deduplicateAndSortOptions(collectedOptions)
-        if (finalOptions.isEmpty()) {
-            trace(
-                if (sawExplicitBotGate) {
-                    "* YouTube blocked extraction with bot/login gate."
-                } else {
-                    "* No playable YouTube streams could be extracted."
-                }
+        if (!hadSuccessfulHttpResponse && lastIoException != null) {
+            throw lastIoException
+        }
+
+        if (unavailableByStatus && title == null) {
+            trace("* YouTube video unavailable ($unavailableReason).")
+            return@withContext YouTubeMetadataInfo(
+                videoId = videoId,
+                canonicalUrl = canonical,
+                title = "YouTube ($videoId)",
+                isAvailable = false,
+                unavailableReason = unavailableReason ?: "Unavailable or private video",
+                hops = hops,
+                verboseLog = log.toString().trimEnd(),
             )
         }
 
-        YouTubeExtractionResult(
+        YouTubeMetadataInfo(
             videoId = videoId,
-            title = bestTitle ?: "YouTube_$videoId",
-            author = bestAuthor,
-            durationSeconds = bestDuration,
-            options = finalOptions,
+            canonicalUrl = canonical,
+            title = title ?: "YouTube ($videoId)",
+            channelTitle = channelTitle,
+            channelUrl = channelUrl,
+            thumbnailUrl = thumbnailUrl ?: defaultThumbnailUrl(videoId),
+            durationSeconds = durationSeconds,
+            publishedAt = publishedAt,
+            isAvailable = true,
             hops = hops,
             verboseLog = log.toString().trimEnd(),
         )
     }
 
-    private fun isStreamUrlReachable(option: YouTubeStreamOption): Boolean {
-        return runCatching {
-            val req = Request.Builder()
-                .url(option.url)
-                .get()
-                .header("Range", "bytes=0-63")
-                .header("User-Agent", option.userAgent ?: WEB_USER_AGENT)
-                .build()
-            client.newCall(req).execute().use { resp ->
-                resp.code == 200 || resp.code == 206
-            }
-        }.getOrDefault(false)
-    }
-
-    private fun isHlsPlaylistReachable(playlistUrl: String): Boolean {
-        return runCatching {
-            val req = Request.Builder()
-                .url(playlistUrl)
-                .get()
-                .header("User-Agent", WEB_USER_AGENT)
-                .build()
-            client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return@use false
-                val text = resp.body?.string().orEmpty()
-                text.contains("#EXTM3U")
-            }
-        }.getOrDefault(false)
-    }
-
-    internal data class ParsedVkrData(
-        val title: String?,
-        val options: List<YouTubeStreamOption>,
-    )
-
-    internal fun parseVkrResponse(rawJson: String, videoId: String, fallbackTitle: String? = null): ParsedVkrData {
-        val root = runCatching { JSONObject(rawJson) }.getOrNull() ?: return ParsedVkrData(fallbackTitle, emptyList())
-        val data = root.optJSONObject("data") ?: return ParsedVkrData(fallbackTitle, emptyList())
-        val rawTitle = data.optString("title").takeIf { it.isNotBlank() } ?: fallbackTitle
-        val safeTitle = sanitizeForFileName(rawTitle ?: "YouTube_$videoId")
-        val downloads = data.optJSONArray("downloads") ?: return ParsedVkrData(rawTitle, emptyList())
-
-        val options = mutableListOf<YouTubeStreamOption>()
-        for (i in 0 until downloads.length()) {
-            val item = downloads.optJSONObject(i) ?: continue
-            val fid = item.optString("format_id", "")
-            val url = item.optString("url", "").trim()
-            if (url.isEmpty() || fid.contains("storyboard", ignoreCase = true) || fid.contains("-drc", ignoreCase = true)) {
-                continue
-            }
-
-            val isHls = url.contains("manifest.googlevideo.com", ignoreCase = true)
-            val ext = item.optString("ext", "").lowercase(Locale.US)
-            val formatLabel = item.optString("format", "")
-            val width = item.optInt("width", 0)
-            val height = item.optInt("height", 0)
-            val sizeStr = item.optString("size", "").takeIf { it.isNotBlank() && it != "0 KB" }
-
-            if (isHls) {
-                // HLS streams on manifest.googlevideo.com: 96 = 1080p TS (Video+Audio), 233/234 = AAC Audio fMP4
-                when {
-                    fid == "96" || height >= 720 -> {
-                        val q = if (height > 0) "${height}p HD" else "1080p HD"
-                        options.add(
-                            YouTubeStreamOption(
-                                itag = fid.toIntOrNull() ?: 96,
-                                url = url,
-                                qualityLabel = q,
-                                container = "TS",
-                                category = MediaFormatCategory.VIDEO_WITH_AUDIO,
-                                fileSizeFormatted = sizeStr,
-                                suggestedFileName = "${safeTitle}_${if (height > 0) "${height}p" else "1080p"}.ts",
-                                userAgent = WEB_USER_AGENT,
-                            )
-                        )
-                    }
-                    fid == "234" || fid == "233" || (width == 0 && height == 0) -> {
-                        val isHigh = fid == "234"
-                        val q = if (isHigh) "128 kbps" else "48 kbps"
-                        options.add(
-                            YouTubeStreamOption(
-                                itag = fid.toIntOrNull() ?: if (isHigh) 234 else 233,
-                                url = url,
-                                qualityLabel = q,
-                                container = "M4A",
-                                category = MediaFormatCategory.AUDIO_ONLY,
-                                bitrateKbps = if (isHigh) 128 else 48,
-                                fileSizeFormatted = sizeStr,
-                                suggestedFileName = "${safeTitle}_${if (isHigh) "HQ_Audio" else "Audio"}.m4a",
-                                userAgent = WEB_USER_AGENT,
-                            )
-                        )
-                    }
-                }
-            } else {
-                val itag = fid.toIntOrNull() ?: 0
-                val isAudio = ext in setOf("m4a", "mp3", "opus", "ogg") || (width == 0 && height == 0)
-                val isMuxed = itag in setOf(18, 22, 37, 38) || (!isAudio && formatLabel.contains("18", ignoreCase = true))
-                val category = when {
-                    isAudio -> MediaFormatCategory.AUDIO_ONLY
-                    isMuxed -> MediaFormatCategory.VIDEO_WITH_AUDIO
-                    else -> MediaFormatCategory.VIDEO_ONLY
-                }
-                val container = when (ext) {
-                    "m4a" -> "M4A"
-                    "mp3" -> "MP3"
-                    "webm" -> if (isAudio) "OPUS" else "WEBM"
-                    "mp4" -> "MP4"
-                    else -> if (isAudio) "M4A" else "MP4"
-                }
-                val qualityLabel = when {
-                    isAudio -> if (itag == 140 || itag == 251) "128 kbps" else "Audio"
-                    height > 0 -> "${height}p"
-                    else -> formatLabel.ifBlank { "Video" }
-                }
-                val finalExt = when (container) {
-                    "M4A" -> "m4a"
-                    "MP3" -> "mp3"
-                    "OPUS", "WEBM" -> "webm"
-                    else -> "mp4"
-                }
-                options.add(
-                    YouTubeStreamOption(
-                        itag = itag,
-                        url = url,
-                        qualityLabel = qualityLabel,
-                        container = container,
-                        category = category,
-                        fileSizeFormatted = sizeStr,
-                        suggestedFileName = "${safeTitle}_${qualityLabel.replace(" ", "_")}.$finalExt",
-                        userAgent = WEB_USER_AGENT,
-                    )
-                )
-            }
-        }
-        return ParsedVkrData(rawTitle, options)
-    }
-
-    internal data class ParsedPlayerData(
-        val title: String?,
-        val author: String?,
-        val durationSeconds: Long?,
-        val options: List<YouTubeStreamOption>,
-    )
-
-    internal fun parsePlayerJson(
-        root: JSONObject,
+    internal fun parseOEmbedJson(
+        rawJson: String,
         videoId: String,
-        userAgent: String,
-    ): ParsedPlayerData {
-        val details = root.optJSONObject("videoDetails")
-        val rawTitle = details?.optString("title")?.takeIf { it.isNotBlank() }
-        val author = details?.optString("author")?.takeIf { it.isNotBlank() }
-        val durationSec = details?.optString("lengthSeconds")?.toLongOrNull()
-
-        val streamingData = root.optJSONObject("streamingData")
-            ?: return ParsedPlayerData(rawTitle, author, durationSec, emptyList())
-
-        val safeTitle = sanitizeForFileName(rawTitle ?: "YouTube_$videoId")
-        val options = mutableListOf<YouTubeStreamOption>()
-
-        streamingData.optJSONArray("formats")?.let { formats ->
-            parseFormatArray(
-                array = formats,
-                isAdaptive = false,
-                safeTitle = safeTitle,
-                durationSec = durationSec,
-                userAgent = userAgent,
-                out = options,
-            )
+        canonicalUrl: String,
+    ): YouTubeMetadataInfo? {
+        val root = runCatching { JSONObject(rawJson) }.getOrNull() ?: return null
+        val title = root.optString("title").takeIf { it.isNotBlank() } ?: return null
+        val author = root.optString("author_name").takeIf { it.isNotBlank() }
+        val authorUrl = root.optString("author_url").takeIf {
+            it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true)
         }
+        val thumb = root.optString("thumbnail_url").takeIf {
+            it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true)
+        } ?: defaultThumbnailUrl(videoId)
 
-        streamingData.optJSONArray("adaptiveFormats")?.let { adaptive ->
-            parseFormatArray(
-                array = adaptive,
-                isAdaptive = true,
-                safeTitle = safeTitle,
-                durationSec = durationSec,
-                userAgent = userAgent,
-                out = options,
-            )
-        }
-
-        return ParsedPlayerData(rawTitle, author, durationSec, options)
-    }
-
-    private fun parseFormatArray(
-        array: JSONArray,
-        isAdaptive: Boolean,
-        safeTitle: String,
-        durationSec: Long?,
-        userAgent: String,
-        out: MutableList<YouTubeStreamOption>,
-    ) {
-        for (i in 0 until array.length()) {
-            val item = array.optJSONObject(i) ?: continue
-            val directUrl = item.optString("url", "").trim()
-            if (directUrl.isEmpty()) continue
-
-            val itag = item.optInt("itag", 0)
-            val mimeType = item.optString("mimeType", "").lowercase(Locale.US)
-            val bitrateBps = item.optLong("bitrate", 0L).takeIf { it > 0L }
-                ?: item.optLong("averageBitrate", 0L).takeIf { it > 0L }
-            val bitrateKbps = bitrateBps?.let { (it / 1000L).toInt().coerceAtLeast(1) }
-
-            val contentLength = item.optString("contentLength", "").toLongOrNull()
-                ?: if (bitrateBps != null && durationSec != null && durationSec > 0L) {
-                    (bitrateBps * durationSec) / 8L
-                } else {
-                    null
-                }
-
-            val isAudioOnly = mimeType.startsWith("audio/")
-            val category = when {
-                isAudioOnly -> MediaFormatCategory.AUDIO_ONLY
-                !isAdaptive -> MediaFormatCategory.VIDEO_WITH_AUDIO
-                else -> MediaFormatCategory.VIDEO_ONLY
-            }
-
-            val container = when {
-                mimeType.contains("mp4") && isAudioOnly -> "M4A"
-                mimeType.contains("mp4") -> "MP4"
-                mimeType.contains("webm") && isAudioOnly -> "OPUS"
-                mimeType.contains("webm") -> "WEBM"
-                mimeType.contains("3gpp") -> "3GP"
-                else -> if (isAudioOnly) "M4A" else "MP4"
-            }
-
-            val height = item.optInt("height", 0)
-            val fps = item.optInt("fps", 0)
-            val qualityLabel = when {
-                isAudioOnly -> "${bitrateKbps ?: 128} kbps"
-                item.optString("qualityLabel").isNotBlank() -> item.optString("qualityLabel")
-                height > 0 -> if (fps >= 50) "${height}p${fps}" else "${height}p"
-                else -> item.optString("quality", "Standard").uppercase(Locale.US)
-            }
-
-            val extLower = when (container) {
-                "M4A" -> "m4a"
-                "OPUS", "WEBM" -> "webm"
-                "3GP" -> "3gp"
-                else -> "mp4"
-            }
-            val labelSlug = qualityLabel.replace(Regex("""\s+"""), "_")
-            val fileName = "${safeTitle}_${labelSlug}.$extLower"
-
-            out.add(
-                YouTubeStreamOption(
-                    itag = itag,
-                    url = directUrl,
-                    qualityLabel = qualityLabel,
-                    container = container,
-                    category = category,
-                    bitrateKbps = bitrateKbps,
-                    contentLengthBytes = contentLength,
-                    fileSizeFormatted = VideoLinkExtractor.formatByteSize(contentLength),
-                    suggestedFileName = fileName,
-                    userAgent = userAgent,
-                )
-            )
-        }
-    }
-
-    private fun deduplicateAndSortOptions(options: List<YouTubeStreamOption>): List<YouTubeStreamOption> {
-        val unique = linkedMapOf<String, YouTubeStreamOption>()
-        for (opt in options) {
-            val key = "${opt.category.name}|${opt.qualityLabel}|${opt.container}"
-            val existing = unique[key]
-            if (existing == null || (opt.contentLengthBytes ?: 0L) > (existing.contentLengthBytes ?: 0L)) {
-                unique[key] = opt
-            }
-        }
-
-        return unique.values.sortedWith(
-            compareBy<YouTubeStreamOption> {
-                when (it.category) {
-                    MediaFormatCategory.VIDEO_WITH_AUDIO -> 0
-                    MediaFormatCategory.AUDIO_ONLY -> 1
-                    MediaFormatCategory.VIDEO_ONLY -> 2
-                }
-            }.thenByDescending {
-                if (it.isAudioOnly) {
-                    it.bitrateKbps ?: 0
-                } else {
-                    it.qualityLabel.takeWhile { ch -> ch.isDigit() }.toIntOrNull() ?: 0
-                }
-            }.thenBy { if (it.container == "MP4" || it.container == "M4A" || it.container == "TS") 0 else 1 }
+        return YouTubeMetadataInfo(
+            videoId = videoId,
+            canonicalUrl = canonicalUrl,
+            title = title,
+            channelTitle = author,
+            channelUrl = authorUrl,
+            thumbnailUrl = thumb,
+            isAvailable = true,
         )
     }
 
-    private fun buildInnerTubePayload(
+    internal fun parseDataApiJson(
+        rawJson: String,
         videoId: String,
-        spec: InnerTubeClientSpec,
-        visitorData: String?,
-    ): String {
-        val clientObj = JSONObject().apply {
-            put("clientName", spec.clientName)
-            put("clientVersion", spec.clientVersion)
-            put("hl", "en")
-            put("gl", "US")
-            if (!visitorData.isNullOrBlank()) put("visitorData", visitorData)
-            spec.extraContext.forEach { (k, v) -> put(k, v) }
+        canonicalUrl: String,
+    ): YouTubeMetadataInfo? {
+        val root = runCatching { JSONObject(rawJson) }.getOrNull() ?: return null
+        val items = root.optJSONArray("items") ?: return null
+        if (items.length() == 0) {
+            return YouTubeMetadataInfo(
+                videoId = videoId,
+                canonicalUrl = canonicalUrl,
+                title = "YouTube ($videoId)",
+                isAvailable = false,
+                unavailableReason = "Video not found or private",
+            )
         }
-        val contextObj = JSONObject().apply {
-            put("client", clientObj)
-            if (!spec.thirdPartyEmbedUrl.isNullOrBlank()) {
-                put("thirdParty", JSONObject().apply { put("embedUrl", spec.thirdPartyEmbedUrl) })
-            }
-        }
-        return JSONObject().apply {
-            put("context", contextObj)
-            put("videoId", videoId)
-            put("contentCheckOk", true)
-            put("racyCheckOk", true)
-        }.toString()
-    }
+        val item = items.optJSONObject(0) ?: return null
+        val snippet = item.optJSONObject("snippet")
+        val contentDetails = item.optJSONObject("contentDetails")
 
-    private fun extractJsonAfterMarker(html: String, marker: String): JSONObject? {
-        val idx = html.indexOf(marker)
-        if (idx < 0) return null
-        val start = html.indexOf('{', idx + marker.length)
-        if (start < 0) return null
+        val title = snippet?.optString("title")?.takeIf { it.isNotBlank() } ?: "YouTube ($videoId)"
+        val channelTitle = snippet?.optString("channelTitle")?.takeIf { it.isNotBlank() }
+        val channelId = snippet?.optString("channelId")?.takeIf { it.isNotBlank() }
+        val channelUrl = channelId?.let { "https://www.youtube.com/channel/$it" }
+        val publishedAt = snippet?.optString("publishedAt")?.takeIf { it.length >= 10 }?.take(10)
 
-        var depth = 0
-        var inString = false
-        var escaped = false
-        for (i in start until html.length) {
-            val c = html[i]
-            if (escaped) {
-                escaped = false
-                continue
-            }
-            if (c == '\\' && inString) {
-                escaped = true
-                continue
-            }
-            if (c == '"') {
-                inString = !inString
-                continue
-            }
-            if (!inString) {
-                if (c == '{') depth++
-                else if (c == '}') {
-                    depth--
-                    if (depth == 0) {
-                        val jsonStr = html.substring(start, i + 1)
-                        return runCatching { JSONObject(jsonStr) }.getOrNull()
-                    }
+        val thumbs = snippet?.optJSONObject("thumbnails")
+        val thumb = listOf("maxres", "standard", "high", "medium", "default")
+            .firstNotNullOfOrNull { key ->
+                thumbs?.optJSONObject(key)?.optString("url")?.takeIf {
+                    it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true)
                 }
-            }
-        }
-        return null
-    }
+            } ?: defaultThumbnailUrl(videoId)
 
-    private fun sanitizeForFileName(raw: String): String {
-        return raw.replace(Regex("""[\\/:*?"<>|]+"""), " ")
-            .trim()
-            .replace(Regex("""\s+"""), "_")
-            .take(64)
-            .ifBlank { "YouTube_Video" }
+        val durationSeconds = parseIso8601DurationSeconds(contentDetails?.optString("duration"))
+
+        return YouTubeMetadataInfo(
+            videoId = videoId,
+            canonicalUrl = canonicalUrl,
+            title = title,
+            channelTitle = channelTitle,
+            channelUrl = channelUrl,
+            thumbnailUrl = thumb,
+            durationSeconds = durationSeconds,
+            publishedAt = publishedAt,
+            isAvailable = true,
+        )
     }
 }

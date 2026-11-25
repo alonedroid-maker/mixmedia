@@ -78,8 +78,10 @@ fun MovieDiscoverySettingsSection(
 ) {
     var tmdbDraft by remember(preferences.tmdbApiKey) { mutableStateOf(preferences.tmdbApiKey) }
     var omdbDraft by remember(preferences.omdbApiKey) { mutableStateOf(preferences.omdbApiKey) }
+    var youtubeDraft by remember(preferences.youtubeApiKey) { mutableStateOf(preferences.youtubeApiKey) }
     var showTmdbKey by remember { mutableStateOf(false) }
     var showOmdbKey by remember { mutableStateOf(false) }
+    var showYoutubeKey by remember { mutableStateOf(false) }
     var showAddSiteDialog by remember { mutableStateOf(false) }
 
     Text(
@@ -89,7 +91,7 @@ fun MovieDiscoverySettingsSection(
         modifier = Modifier.padding(horizontal = 4.dp),
     )
 
-    // API Keys Card (Optional TMDB & OMDb)
+    // API Keys Card (Optional TMDB, OMDb & YouTube Data API)
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -168,6 +170,38 @@ fun MovieDiscoverySettingsSection(
             }
             Text(
                 text = strings.discover.omdbKeyHelper,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                OutlinedTextField(
+                    value = youtubeDraft,
+                    onValueChange = {
+                        youtubeDraft = it
+                        onUpdatePreferences { p -> p.copy(youtubeApiKey = it) }
+                    },
+                    label = { Text(strings.discover.youtubeKeyLabel) },
+                    singleLine = true,
+                    visualTransformation = if (showYoutubeKey) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showYoutubeKey = !showYoutubeKey }) {
+                            Icon(
+                                imageVector = if (showYoutubeKey) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                contentDescription = null,
+                            )
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_youtube_key_input"),
+                )
+            }
+            Text(
+                text = strings.discover.youtubeKeyHelper,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

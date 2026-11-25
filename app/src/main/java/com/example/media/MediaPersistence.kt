@@ -18,10 +18,12 @@ class MediaPersistence(context: Context) {
     private val recentSearchesFile = File(mediaDir, "recent_searches.json")
     private val savedSourcesFile = File(mediaDir, "saved_sources.json")
     private val sourceSitesFile = File(mediaDir, "source_sites.json")
+    private val trendingCacheFile = File(cacheDir, "trending_cache.json")
 
     fun loadPreferences(): MediaPreferences = MediaPreferences(
         tmdbApiKey = prefs.getString(KEY_TMDB_API_KEY, "") ?: "",
         omdbApiKey = prefs.getString(KEY_OMDB_API_KEY, "") ?: "",
+        youtubeApiKey = prefs.getString(KEY_YOUTUBE_API_KEY, "") ?: "",
         searchLanguage = SearchLanguagePreference.fromCode(prefs.getString(KEY_SEARCH_LANG, null)),
         searchEngine = SearchEngineOption.fromCode(prefs.getString(KEY_SEARCH_ENGINE, null)),
         preferInternalBrowser = prefs.getBoolean(KEY_PREFER_INTERNAL_BROWSER, true),
@@ -32,6 +34,7 @@ class MediaPersistence(context: Context) {
         prefs.edit()
             .putString(KEY_TMDB_API_KEY, preferences.tmdbApiKey.trim())
             .putString(KEY_OMDB_API_KEY, preferences.omdbApiKey.trim())
+            .putString(KEY_YOUTUBE_API_KEY, preferences.youtubeApiKey.trim())
             .putString(KEY_SEARCH_LANG, preferences.searchLanguage.code)
             .putString(KEY_SEARCH_ENGINE, preferences.searchEngine.code)
             .putBoolean(KEY_PREFER_INTERNAL_BROWSER, preferences.preferInternalBrowser)
@@ -191,6 +194,51 @@ class MediaPersistence(context: Context) {
         return File(cacheDir, "archive_${safeId}.tsv")
     }
 
+    fun loadTrendingCache(): TrendingFeedBundle? = synchronized(lock) {
+        if (!trendingCacheFile.exists()) return null
+        return try {
+            val root = JSONObject(trendingCacheFile.readText())
+            val moviesArr = root.optJSONArray("movies") ?: JSONArray()
+            val tvArr = root.optJSONArray("tvShows") ?: JSONArray()
+            val movies = buildList(moviesArr.length()) {
+                for (i in 0 until moviesArr.length()) {
+                    moviesArr.optJSONObject(i)?.let { add(parseMediaSummary(it)) }
+                }
+            }
+            val tvShows = buildList(tvArr.length()) {
+                for (i in 0 until tvArr.length()) {
+                    tvArr.optJSONObject(i)?.let { add(parseMediaSummary(it)) }
+                }
+            }
+            TrendingFeedBundle(
+                movies = movies,
+                tvShows = tvShows,
+                lastUpdatedMillis = root.optLong("lastUpdatedMillis", 0L),
+                isUsingFallbackSources = root.optBoolean("isUsingFallbackSources", false),
+                attribution = root.optString("attribution", ""),
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun saveTrendingCache(bundle: TrendingFeedBundle) = synchronized(lock) {
+        val moviesArr = JSONArray().apply {
+            bundle.movies.forEach { put(serializeMediaSummary(it)) }
+        }
+        val tvArr = JSONArray().apply {
+            bundle.tvShows.forEach { put(serializeMediaSummary(it)) }
+        }
+        val root = JSONObject().apply {
+            put("movies", moviesArr)
+            put("tvShows", tvArr)
+            put("lastUpdatedMillis", bundle.lastUpdatedMillis)
+            put("isUsingFallbackSources", bundle.isUsingFallbackSources)
+            put("attribution", bundle.attribution)
+        }
+        atomicWrite(trendingCacheFile, root.toString())
+    }
+
     fun getCacheSizeBytes(): Long {
         return cacheDir.listFiles()?.sumOf { it.length() } ?: 0L
     }
@@ -253,12 +301,65 @@ class MediaPersistence(context: Context) {
         put("tmdbId", item.tmdbId ?: JSONObject.NULL)
         put("tvMazeId", item.tvMazeId ?: JSONObject.NULL)
         put("wikidataId", item.wikidataId ?: JSONObject.NULL)
+        put("digitalReleaseStatus", item.digitalReleaseStatus.name)
+        put("digitalReleaseDate", item.digitalReleaseDate ?: JSONObject.NULL)
+        put("tvReleaseStatus", item.tvReleaseStatus.name)
+        put("seasonCount", item.seasonCount ?: JSONObject.NULL)
+        put(
+            "watchProviders",
+            JSONArray().apply {
+                item.watchProviders.forEach { wp ->
+                    put(
+                        JSONObject().apply {
+                            put("name", wp.name)
+                            put("category", wp.category.name)
+                            put("logoUrl", wp.logoUrl ?: JSONObject.NULL)
+                            put("url", wp.url ?: JSONObject.NULL)
+                            put("region", wp.region)
+                        }
+                    )
+                }
+            },
+        )
+        put("watchProvidersPageUrl", item.watchProvidersPageUrl ?: JSONObject.NULL)
+        put("authorizedDirectDownloadUrl", item.authorizedDirectDownloadUrl ?: JSONObject.NULL)
     }
 
     private fun parseMediaSummary(obj: JSONObject): MediaSearchResult {
         val type = runCatching {
             MediaType.valueOf(obj.optString("mediaType", MediaType.MOVIE.name))
         }.getOrDefault(MediaType.MOVIE)
+        val digitalStatus = runCatching {
+            DigitalReleaseStatus.valueOf(obj.optString("digitalReleaseStatus", DigitalReleaseStatus.UNKNOWN.name))
+        }.getOrDefault(DigitalReleaseStatus.UNKNOWN)
+        val tvStatus = runCatching {
+            TvReleaseStatus.valueOf(obj.optString("tvReleaseStatus", TvReleaseStatus.UNKNOWN.name))
+        }.getOrDefault(TvReleaseStatus.UNKNOWN)
+        val wpArr = obj.optJSONArray("watchProviders")
+        val providers = if (wpArr != null) {
+            buildList(wpArr.length()) {
+                for (i in 0 until wpArr.length()) {
+                    val wp = wpArr.optJSONObject(i) ?: continue
+                    val cat = runCatching {
+                        ProviderCategory.valueOf(wp.optString("category", ProviderCategory.OFFICIAL_PAGE.name))
+                    }.getOrDefault(ProviderCategory.OFFICIAL_PAGE)
+                    val wpUrl = wp.optNullableString("url")?.takeIf { FuzzyTitleMatcher.isSafeHttpUrl(it) }
+                    val logo = wp.optNullableString("logoUrl")?.takeIf { FuzzyTitleMatcher.isSafeHttpUrl(it) }
+                    val name = wp.optString("name").takeIf { it.isNotBlank() } ?: continue
+                    add(
+                        WatchProviderInfo(
+                            name = name,
+                            category = cat,
+                            logoUrl = logo,
+                            url = wpUrl,
+                            region = wp.optString("region", "US"),
+                        )
+                    )
+                }
+            }
+        } else {
+            emptyList()
+        }
         return MediaSearchResult(
             id = obj.getString("id"),
             mediaType = type,
@@ -278,6 +379,15 @@ class MediaPersistence(context: Context) {
             tmdbId = obj.optNullableInt("tmdbId"),
             tvMazeId = obj.optNullableInt("tvMazeId"),
             wikidataId = obj.optNullableString("wikidataId"),
+            digitalReleaseStatus = digitalStatus,
+            digitalReleaseDate = obj.optNullableString("digitalReleaseDate"),
+            tvReleaseStatus = tvStatus,
+            seasonCount = obj.optNullableInt("seasonCount"),
+            watchProviders = providers,
+            watchProvidersPageUrl = obj.optNullableString("watchProvidersPageUrl")
+                ?.takeIf { FuzzyTitleMatcher.isSafeHttpUrl(it) },
+            authorizedDirectDownloadUrl = obj.optNullableString("authorizedDirectDownloadUrl")
+                ?.takeIf { FuzzyTitleMatcher.isSafeHttpUrl(it) },
         )
     }
 
@@ -301,6 +411,7 @@ class MediaPersistence(context: Context) {
         private const val PREFS_NAME = "fixlink_media_prefs"
         private const val KEY_TMDB_API_KEY = "tmdb_api_key"
         private const val KEY_OMDB_API_KEY = "omdb_api_key"
+        private const val KEY_YOUTUBE_API_KEY = "youtube_api_key"
         private const val KEY_SEARCH_LANG = "search_language"
         private const val KEY_SEARCH_ENGINE = "search_engine"
         private const val KEY_PREFER_INTERNAL_BROWSER = "prefer_internal_browser"

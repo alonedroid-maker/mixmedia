@@ -1,6 +1,10 @@
 package com.example.media
 
 import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlinx.coroutines.Dispatchers
@@ -26,12 +30,14 @@ class MetadataRepository(
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, MediaDetails>?): Boolean = size > 25
     }
     private var cachedPopularFeed: List<MediaSearchResult> = emptyList()
+    private var cachedTrendingFeed: TrendingFeedBundle? = null
 
     fun clearMemoryCaches() {
         synchronized(cacheLock) {
             searchCache.clear()
             detailsCache.clear()
             cachedPopularFeed = emptyList()
+            cachedTrendingFeed = null
         }
     }
 
@@ -149,6 +155,98 @@ class MetadataRepository(
         items
     }
 
+    suspend fun getTrendingFeed(
+        preferences: MediaPreferences,
+        persistence: MediaPersistence?,
+        forceRefresh: Boolean = false,
+        nowMillis: Long = System.currentTimeMillis(),
+    ): TrendingFeedBundle = withContext(Dispatchers.IO) {
+        val expectsFallback = preferences.tmdbApiKey.isBlank()
+        if (!forceRefresh) {
+            val memCached = synchronized(cacheLock) { cachedTrendingFeed }
+            if (memCached != null &&
+                (memCached.movies.isNotEmpty() || memCached.tvShows.isNotEmpty()) &&
+                nowMillis - memCached.lastUpdatedMillis < TRENDING_CACHE_TTL_MS &&
+                (!expectsFallback || memCached.isUsingFallbackSources) &&
+                (expectsFallback || !memCached.isUsingFallbackSources)
+            ) {
+                return@withContext memCached
+            }
+
+            val diskCached = persistence?.loadTrendingCache()
+            if (diskCached != null &&
+                (diskCached.movies.isNotEmpty() || diskCached.tvShows.isNotEmpty()) &&
+                nowMillis - diskCached.lastUpdatedMillis < TRENDING_CACHE_TTL_MS &&
+                (!expectsFallback || diskCached.isUsingFallbackSources) &&
+                (expectsFallback || !diskCached.isUsingFallbackSources)
+            ) {
+                synchronized(cacheLock) { cachedTrendingFeed = diskCached }
+                return@withContext diskCached
+            }
+        }
+
+        val todayIso = formatIsoDateUtc(nowMillis)
+        var tmdbMovies = emptyList<MediaSearchResult>()
+        var tmdbTv = emptyList<MediaSearchResult>()
+
+        if (!expectsFallback) {
+            supervisorScope {
+                val moviesDef = async {
+                    fetchTmdbTrendingMoviesDigital(
+                        apiKey = preferences.tmdbApiKey,
+                        langPref = preferences.searchLanguage,
+                        todayIso = todayIso,
+                    )
+                }
+                val tvDef = async {
+                    fetchTmdbTrendingTvDetailed(
+                        apiKey = preferences.tmdbApiKey,
+                        langPref = preferences.searchLanguage,
+                    )
+                }
+                tmdbMovies = moviesDef.await()
+                tmdbTv = tvDef.await()
+            }
+        }
+
+        val needMovieFallback = expectsFallback || tmdbMovies.isEmpty()
+        val needTvFallback = expectsFallback || tmdbTv.isEmpty()
+
+        var fallbackMovies = emptyList<MediaSearchResult>()
+        var fallbackTv = emptyList<MediaSearchResult>()
+        if (needMovieFallback || needTvFallback) {
+            supervisorScope {
+                val mDef = if (needMovieFallback) async { zeroKey.fetchAppleTopMoviesFallback(limit = 5) } else null
+                val tDef = if (needTvFallback) async { zeroKey.fetchTrendingTvMazeFallback(limit = 5) } else null
+                fallbackMovies = mDef?.await().orEmpty()
+                fallbackTv = tDef?.await().orEmpty()
+            }
+        }
+
+        val finalMovies = (if (tmdbMovies.isNotEmpty()) tmdbMovies else fallbackMovies).take(5)
+        val finalTv = (if (tmdbTv.isNotEmpty()) tmdbTv else fallbackTv).take(5)
+        val usedFallback = needMovieFallback || needTvFallback
+
+        val attrParts = buildList {
+            if (tmdbMovies.isNotEmpty() || tmdbTv.isNotEmpty()) add("TMDB")
+            if (needMovieFallback && finalMovies.isNotEmpty()) add("Apple TV RSS")
+            if (needTvFallback && finalTv.isNotEmpty()) add("TVmaze")
+        }.distinct()
+
+        val bundle = TrendingFeedBundle(
+            movies = finalMovies,
+            tvShows = finalTv,
+            lastUpdatedMillis = nowMillis,
+            isUsingFallbackSources = usedFallback,
+            attribution = attrParts.joinToString(" • "),
+        )
+        if (finalMovies.isNotEmpty() || finalTv.isNotEmpty()) {
+            synchronized(cacheLock) { cachedTrendingFeed = bundle }
+            persistence?.saveTrendingCache(bundle)
+        }
+        bundle
+    }
+
     suspend fun getMediaDetails(
         summary: MediaSearchResult,
         preferences: MediaPreferences,
@@ -239,6 +337,16 @@ class MetadataRepository(
                     ?: summary.persianTitle
 
                 val resolvedTmdbId = tmdbDetails?.tmdbId ?: summary.tmdbId
+                val resolvedProviders = tmdbDetails?.watchProviders?.takeIf { it.isNotEmpty() }
+                    ?: summary.watchProviders
+                val resolvedProvidersPage = tmdbDetails?.watchProvidersPageUrl ?: summary.watchProvidersPageUrl
+                val resolvedDigitalStatus = tmdbDetails?.digitalReleaseStatus
+                    ?.takeIf { it != DigitalReleaseStatus.UNKNOWN }
+                    ?: summary.digitalReleaseStatus
+                val resolvedDigitalDate = tmdbDetails?.digitalReleaseDate ?: summary.digitalReleaseDate
+                val resolvedTvStatus = tmdbDetails?.tvReleaseStatus
+                    ?.takeIf { it != TvReleaseStatus.UNKNOWN }
+                    ?: summary.tvReleaseStatus
                 details = MediaDetails(
                     id = summary.id,
                     mediaType = summary.mediaType,
@@ -263,7 +371,7 @@ class MetadataRepository(
                     status = tmdbDetails?.status ?: tvMaze?.status,
                     startYear = tmdbDetails?.startYear ?: tvMaze?.startYear ?: summary.releaseYear,
                     endYear = tmdbDetails?.endYear ?: tvMaze?.endYear,
-                    totalSeasons = tmdbDetails?.totalSeasons ?: seasonsList.size.takeIf { it > 0 },
+                    totalSeasons = tmdbDetails?.totalSeasons ?: seasonsList.size.takeIf { it > 0 } ?: summary.seasonCount,
                     totalEpisodes = tmdbDetails?.totalEpisodes ?: tvMaze?.totalEpisodes,
                     seasons = seasonsList,
                     imdbId = imdbId,
@@ -277,6 +385,12 @@ class MetadataRepository(
                     },
                     wikipediaUrl = (wiki?.wikidataId ?: summary.wikidataId)?.let { "https://www.wikidata.org/wiki/$it" },
                     sourceAttribution = buildAttribution(tmdbDetails != null, omdb != null, tvMaze != null, wiki != null),
+                    digitalReleaseStatus = resolvedDigitalStatus,
+                    digitalReleaseDate = resolvedDigitalDate,
+                    tvReleaseStatus = resolvedTvStatus,
+                    watchProviders = resolvedProviders,
+                    watchProvidersPageUrl = resolvedProvidersPage,
+                    authorizedDirectDownloadUrl = summary.authorizedDirectDownloadUrl,
                 )
             }
 
@@ -470,6 +584,312 @@ class MetadataRepository(
         return parseTmdbMultiSearchJson(body).take(12)
     }
 
+    private suspend fun fetchTmdbTrendingMoviesDigital(
+        apiKey: String,
+        langPref: SearchLanguagePreference,
+        todayIso: String,
+    ): List<MediaSearchResult> = supervisorScope {
+        val candidateIds = LinkedHashSet<Int>()
+        getString("https://api.themoviedb.org/3/trending/movie/week?api_key=$apiKey&language=en-US")?.let { body ->
+            val arr = runCatching { JSONObject(body).optJSONArray("results") }.getOrNull()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    arr.optJSONObject(i)?.optInt("id", -1)?.takeIf { it > 0 }?.let { candidateIds.add(it) }
+                }
+            }
+        }
+        if (candidateIds.size < 10) {
+            getString(
+                "https://api.themoviedb.org/3/discover/movie?api_key=$apiKey&language=en-US&sort_by=popularity.desc&with_release_type=4|6&release_date.lte=$todayIso"
+            )?.let { body ->
+                val arr = runCatching { JSONObject(body).optJSONArray("results") }.getOrNull()
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        arr.optJSONObject(i)?.optInt("id", -1)?.takeIf { it > 0 }?.let { candidateIds.add(it) }
+                    }
+                }
+            }
+        }
+
+        val inspected = candidateIds.take(14).map { id ->
+            async {
+                val enDef = async {
+                    getString(
+                        "https://api.themoviedb.org/3/movie/$id?api_key=$apiKey&language=en-US&append_to_response=release_dates,watch/providers,credits,external_ids"
+                    )
+                }
+                val faDef = if (langPref != SearchLanguagePreference.EN) {
+                    async { getString("https://api.themoviedb.org/3/movie/$id?api_key=$apiKey&language=fa-IR") }
+                } else null
+                val enBody = enDef.await() ?: return@async null
+                val faBody = faDef?.await()
+                parseTmdbMovieTrendingDetail(enBody, faBody, todayIso)
+            }
+        }.mapNotNull { it.await() }
+
+        inspected.take(5)
+    }
+
+    private suspend fun fetchTmdbTrendingTvDetailed(
+        apiKey: String,
+        langPref: SearchLanguagePreference,
+    ): List<MediaSearchResult> = supervisorScope {
+        val candidateIds = LinkedHashSet<Int>()
+        getString("https://api.themoviedb.org/3/trending/tv/week?api_key=$apiKey&language=en-US")?.let { body ->
+            val arr = runCatching { JSONObject(body).optJSONArray("results") }.getOrNull()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    arr.optJSONObject(i)?.optInt("id", -1)?.takeIf { it > 0 }?.let { candidateIds.add(it) }
+                }
+            }
+        }
+        val inspected = candidateIds.take(8).map { id ->
+            async {
+                val enDef = async {
+                    getString(
+                        "https://api.themoviedb.org/3/tv/$id?api_key=$apiKey&language=en-US&append_to_response=watch/providers,credits,external_ids"
+                    )
+                }
+                val faDef = if (langPref != SearchLanguagePreference.EN) {
+                    async { getString("https://api.themoviedb.org/3/tv/$id?api_key=$apiKey&language=fa-IR") }
+                } else null
+                val enBody = enDef.await() ?: return@async null
+                val faBody = faDef?.await()
+                parseTmdbTvTrendingDetail(enBody, faBody)
+            }
+        }.mapNotNull { it.await() }
+
+        inspected.take(5)
+    }
+
+    internal fun parseTmdbMovieTrendingDetail(
+        enJson: String,
+        faJson: String?,
+        todayIso: String = formatIsoDateUtc(System.currentTimeMillis()),
+    ): MediaSearchResult? {
+        return try {
+            val obj = JSONObject(enJson)
+            val tmdbId = obj.optInt("id", -1).takeIf { it > 0 } ?: return null
+            val title = obj.optString("title").takeIf { it.isNotBlank() } ?: return null
+            val origTitle = obj.optString("original_title").takeIf { it.isNotBlank() }
+            val faObj = faJson?.let { runCatching { JSONObject(it) }.getOrNull() }
+            val faTitle = faObj?.optString("title")?.takeIf { it.isNotBlank() && !it.equals(title, ignoreCase = true) }
+            val (digitalDate, hasConfirmedDigitalDate) = extractConfirmedDigitalRelease(obj, todayIso)
+            val (providers, providersPage) = parseTmdbWatchProviders(obj.optJSONObject("watch/providers"))
+
+            // Strict digital-availability gate: reject theatrical-only or unconfirmed titles
+            if (!hasConfirmedDigitalDate && providers.isEmpty()) {
+                return null
+            }
+
+            val releaseDate = obj.optString("release_date")
+            val poster = obj.optString("poster_path").takeIf { it.startsWith("/") }?.let { "https://image.tmdb.org/t/p/w342$it" }
+            val genresArr = obj.optJSONArray("genres") ?: JSONArray()
+            val genres = (0 until genresArr.length()).mapNotNull { genresArr.optJSONObject(it)?.optString("name")?.takeIf { n -> n.isNotBlank() } }
+            val runtime = obj.optInt("runtime", 0).takeIf { it > 0 }
+            val rating = obj.optDouble("vote_average", 0.0).takeIf { !it.isNaN() && it > 0.0 }
+            val imdbId = obj.optJSONObject("external_ids")?.optString("imdb_id")?.takeIf { it.startsWith("tt") }
+            val directors = extractTmdbDirectors(obj.optJSONObject("credits"))
+
+            MediaSearchResult(
+                id = "tmdb:movie:$tmdbId",
+                mediaType = MediaType.MOVIE,
+                title = title,
+                persianTitle = faTitle,
+                originalTitle = origTitle,
+                releaseYear = releaseDate.take(4).toIntOrNull(),
+                posterUrl = poster,
+                runtimeMinutes = runtime,
+                genres = genres,
+                directors = directors,
+                imdbRating = rating,
+                overview = obj.optString("overview").takeIf { it.isNotBlank() },
+                persianOverview = faObj?.optString("overview")?.takeIf { it.isNotBlank() },
+                imdbId = imdbId,
+                tmdbId = tmdbId,
+                digitalReleaseStatus = DigitalReleaseStatus.CONFIRMED_DIGITAL,
+                digitalReleaseDate = digitalDate,
+                watchProviders = providers,
+                watchProvidersPageUrl = providersPage,
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    internal fun parseTmdbTvTrendingDetail(
+        enJson: String,
+        faJson: String?,
+    ): MediaSearchResult? {
+        return try {
+            val obj = JSONObject(enJson)
+            val tmdbId = obj.optInt("id", -1).takeIf { it > 0 } ?: return null
+            val title = obj.optString("name").takeIf { it.isNotBlank() } ?: return null
+            val origTitle = obj.optString("original_name").takeIf { it.isNotBlank() }
+            val faObj = faJson?.let { runCatching { JSONObject(it) }.getOrNull() }
+            val faTitle = faObj?.optString("name")?.takeIf { it.isNotBlank() && !it.equals(title, ignoreCase = true) }
+            val (providers, providersPage) = parseTmdbWatchProviders(obj.optJSONObject("watch/providers"))
+            val firstAir = obj.optString("first_air_date")
+            val poster = obj.optString("poster_path").takeIf { it.startsWith("/") }?.let { "https://image.tmdb.org/t/p/w342$it" }
+            val genresArr = obj.optJSONArray("genres") ?: JSONArray()
+            val genres = (0 until genresArr.length()).mapNotNull { genresArr.optJSONObject(it)?.optString("name")?.takeIf { n -> n.isNotBlank() } }
+            val epRuntime = obj.optJSONArray("episode_run_time")?.optInt(0, 0)?.takeIf { it > 0 }
+            val rating = obj.optDouble("vote_average", 0.0).takeIf { !it.isNaN() && it > 0.0 }
+            val imdbId = obj.optJSONObject("external_ids")?.optString("imdb_id")?.takeIf { it.startsWith("tt") }
+            val creators = (obj.optJSONArray("created_by") ?: JSONArray()).let { arr ->
+                (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name")?.takeIf { n -> n.isNotBlank() } }
+            }
+            val tvStatus = mapTmdbTvStatus(obj)
+            val seasonCount = obj.optInt("number_of_seasons", 0).takeIf { it > 0 }
+
+            MediaSearchResult(
+                id = "tmdb:tv:$tmdbId",
+                mediaType = MediaType.TV,
+                title = title,
+                persianTitle = faTitle,
+                originalTitle = origTitle,
+                releaseYear = firstAir.take(4).toIntOrNull(),
+                posterUrl = poster,
+                runtimeMinutes = epRuntime,
+                genres = genres,
+                directors = creators,
+                imdbRating = rating,
+                overview = obj.optString("overview").takeIf { it.isNotBlank() },
+                persianOverview = faObj?.optString("overview")?.takeIf { it.isNotBlank() },
+                imdbId = imdbId,
+                tmdbId = tmdbId,
+                tvReleaseStatus = tvStatus,
+                seasonCount = seasonCount,
+                watchProviders = providers,
+                watchProvidersPageUrl = providersPage,
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    internal fun parseTmdbWatchProviders(watchProvidersObj: JSONObject?): Pair<List<WatchProviderInfo>, String?> {
+        val results = watchProvidersObj?.optJSONObject("results") ?: return emptyList<WatchProviderInfo>() to null
+        val preferredRegions = listOf("US", "GB", "CA", "DE", "FR")
+        var selectedRegionCode: String? = null
+        var selectedRegionObj: JSONObject? = null
+        for (region in preferredRegions) {
+            val candidate = results.optJSONObject(region)
+            if (candidate != null && hasAnyProviderEntries(candidate)) {
+                selectedRegionCode = region
+                selectedRegionObj = candidate
+                break
+            }
+        }
+        if (selectedRegionObj == null) {
+            val keys = results.keys()
+            while (keys.hasNext()) {
+                val region = keys.next()
+                val candidate = results.optJSONObject(region)
+                if (candidate != null && hasAnyProviderEntries(candidate)) {
+                    selectedRegionCode = region
+                    selectedRegionObj = candidate
+                    break
+                }
+            }
+        }
+        if (selectedRegionObj == null || selectedRegionCode == null) {
+            return emptyList<WatchProviderInfo>() to null
+        }
+
+        val pageUrl = selectedRegionObj.optString("link").takeIf { FuzzyTitleMatcher.isSafeHttpUrl(it) }
+        val collected = mutableListOf<WatchProviderInfo>()
+        val seen = HashSet<String>()
+
+        fun collectBucket(key: String, category: ProviderCategory) {
+            val arr = selectedRegionObj.optJSONArray(key) ?: return
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val name = item.optString("provider_name").takeIf { it.isNotBlank() } ?: continue
+                val dedup = "${name.lowercase(Locale.US)}:${category.name}"
+                if (!seen.add(dedup)) continue
+                val logo = item.optString("logo_path").takeIf { it.startsWith("/") }
+                    ?.let { "https://image.tmdb.org/t/p/w92$it" }
+                collected.add(
+                    WatchProviderInfo(
+                        name = name,
+                        category = category,
+                        logoUrl = logo,
+                        url = pageUrl,
+                        region = selectedRegionCode,
+                    )
+                )
+            }
+        }
+
+        collectBucket("flatrate", ProviderCategory.STREAMING)
+        collectBucket("free", ProviderCategory.FREE_AD_SUPPORTED)
+        collectBucket("ads", ProviderCategory.FREE_AD_SUPPORTED)
+        collectBucket("rent", ProviderCategory.RENTAL_PURCHASE)
+        collectBucket("buy", ProviderCategory.RENTAL_PURCHASE)
+
+        return collected.take(8) to pageUrl
+    }
+
+    private fun hasAnyProviderEntries(regionObj: JSONObject): Boolean {
+        val keys = listOf("flatrate", "free", "ads", "rent", "buy")
+        return keys.any { (regionObj.optJSONArray(it)?.length() ?: 0) > 0 }
+    }
+
+    private fun extractConfirmedDigitalRelease(obj: JSONObject, todayIso: String): Pair<String?, Boolean> {
+        val countryResults = obj.optJSONObject("release_dates")?.optJSONArray("results") ?: return null to false
+        var earliestDate: String? = null
+        for (i in 0 until countryResults.length()) {
+            val countryObj = countryResults.optJSONObject(i) ?: continue
+            val entries = countryObj.optJSONArray("release_dates") ?: continue
+            for (j in 0 until entries.length()) {
+                val entry = entries.optJSONObject(j) ?: continue
+                val type = entry.optInt("type", -1)
+                // TMDB types: 4 = Digital, 5 = Physical, 6 = TV
+                if (type !in 4..6) continue
+                val dateIso = entry.optString("release_date").take(10)
+                if (dateIso.length != 10 || dateIso > todayIso) continue
+                if (earliestDate == null || dateIso < earliestDate) {
+                    earliestDate = dateIso
+                }
+            }
+        }
+        return earliestDate to (earliestDate != null)
+    }
+
+    private fun mapTmdbTvStatus(obj: JSONObject): TvReleaseStatus {
+        val status = obj.optString("status")
+        return when {
+            status.equals("Ended", ignoreCase = true) ||
+                status.equals("Canceled", ignoreCase = true) -> TvReleaseStatus.ENDED
+            status.equals("In Production", ignoreCase = true) ||
+                status.equals("Planned", ignoreCase = true) -> TvReleaseStatus.UPCOMING
+            status.equals("Returning Series", ignoreCase = true) -> {
+                val hasNextEpisode = !obj.isNull("next_episode_to_air") && obj.optJSONObject("next_episode_to_air") != null
+                val hasLastEpisode = !obj.isNull("last_episode_to_air") && obj.optJSONObject("last_episode_to_air") != null
+                when {
+                    hasNextEpisode -> TvReleaseStatus.CURRENTLY_AIRING
+                    hasLastEpisode -> TvReleaseStatus.SEASON_COMPLETED
+                    obj.optBoolean("in_production", false) -> TvReleaseStatus.CURRENTLY_AIRING
+                    else -> TvReleaseStatus.SEASON_COMPLETED
+                }
+            }
+            else -> TvReleaseStatus.UNKNOWN
+        }
+    }
+
+    private fun extractTmdbDirectors(credits: JSONObject?): List<String> {
+        val crewArr = credits?.optJSONArray("crew") ?: return emptyList()
+        return buildList {
+            for (i in 0 until crewArr.length()) {
+                val c = crewArr.optJSONObject(i) ?: continue
+                if (c.optString("job").equals("Director", ignoreCase = true)) {
+                    c.optString("name").takeIf { it.isNotBlank() }?.let { add(it) }
+                }
+            }
+        }.distinct()
+    }
+
     private suspend fun fetchTmdbFullDetails(
         summary: MediaSearchResult,
         apiKey: String,
@@ -489,8 +909,13 @@ class MetadataRepository(
         }
         val resolvedId = tmdbId ?: return@supervisorScope null
 
+        val appendFields = if (summary.mediaType == MediaType.MOVIE) {
+            "credits,external_ids,release_dates,watch/providers"
+        } else {
+            "credits,external_ids,watch/providers"
+        }
         val enDeferred = async {
-            getString("https://api.themoviedb.org/3/$pathType/$resolvedId?api_key=$apiKey&language=en-US&append_to_response=credits,external_ids")
+            getString("https://api.themoviedb.org/3/$pathType/$resolvedId?api_key=$apiKey&language=en-US&append_to_response=$appendFields")
         }
         val faDeferred = if (langPref != SearchLanguagePreference.EN) {
             async { getString("https://api.themoviedb.org/3/$pathType/$resolvedId?api_key=$apiKey&language=fa-IR") }
@@ -591,6 +1016,20 @@ class MetadataRepository(
                 ?.takeIf { it.isNotBlank() }
             val origLang = obj.optString("original_language").takeIf { it.isNotBlank() }
             val rating = obj.optDouble("vote_average", 0.0).takeIf { !it.isNaN() && it > 0.0 }
+            val (providers, providersPage) = parseTmdbWatchProviders(obj.optJSONObject("watch/providers"))
+            val todayIso = formatIsoDateUtc(System.currentTimeMillis())
+            val (digitalDate, hasDigitalDate) = if (mediaType == MediaType.MOVIE) {
+                extractConfirmedDigitalRelease(obj, todayIso)
+            } else {
+                null to false
+            }
+            val digitalStatus = when {
+                mediaType != MediaType.MOVIE -> DigitalReleaseStatus.UNKNOWN
+                hasDigitalDate || providers.isNotEmpty() -> DigitalReleaseStatus.CONFIRMED_DIGITAL
+                releaseDate.isNotBlank() -> DigitalReleaseStatus.THEATRICAL_ONLY_OR_UNCONFIRMED
+                else -> DigitalReleaseStatus.UNKNOWN
+            }
+            val tvReleaseStatus = if (mediaType == MediaType.TV) mapTmdbTvStatus(obj) else TvReleaseStatus.UNKNOWN
 
             MediaDetails(
                 id = "tmdb:${mediaType.name.lowercase()}:$tmdbId",
@@ -621,6 +1060,11 @@ class MetadataRepository(
                 seasons = seasons,
                 imdbId = imdbId,
                 tmdbId = tmdbId,
+                digitalReleaseStatus = digitalStatus,
+                digitalReleaseDate = digitalDate,
+                tvReleaseStatus = tvReleaseStatus,
+                watchProviders = providers,
+                watchProvidersPageUrl = providersPage,
             )
         } catch (_: Exception) {
             null
@@ -731,6 +1175,15 @@ class MetadataRepository(
     }
 
     companion object {
+        const val TRENDING_CACHE_TTL_MS: Long = 30L * 60L * 1000L
+
+        internal fun formatIsoDateUtc(millis: Long): String {
+            val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("UTC")
+            }
+            return fmt.format(Date(millis))
+        }
+
         fun defaultOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(8, TimeUnit.SECONDS)
             .readTimeout(12, TimeUnit.SECONDS)

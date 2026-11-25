@@ -1,11 +1,5 @@
 package com.example.network
 
-enum class MediaFormatCategory {
-    VIDEO_WITH_AUDIO,
-    VIDEO_ONLY,
-    AUDIO_ONLY,
-}
-
 enum class SocialPlatform {
     YOUTUBE,
     INSTAGRAM,
@@ -45,29 +39,30 @@ data class XExtractionResult(
     val verboseLog: String = "",
 )
 
-data class YouTubeStreamOption(
-    val itag: Int,
-    val url: String,
-    val qualityLabel: String,
-    val container: String,
-    val category: MediaFormatCategory,
-    val bitrateKbps: Int? = null,
-    val contentLengthBytes: Long? = null,
-    val fileSizeFormatted: String? = null,
-    val suggestedFileName: String,
-    val userAgent: String? = null,
-) {
-    val isAudioOnly: Boolean
-        get() = category == MediaFormatCategory.AUDIO_ONLY
-
-    val hasAudio: Boolean
-        get() = category != MediaFormatCategory.VIDEO_ONLY
-}
+data class YouTubeMetadataInfo(
+    val videoId: String,
+    val canonicalUrl: String,
+    val title: String,
+    val channelTitle: String? = null,
+    val channelUrl: String? = null,
+    val thumbnailUrl: String? = null,
+    val durationSeconds: Long? = null,
+    val publishedAt: String? = null,
+    val isAvailable: Boolean = true,
+    val unavailableReason: String? = null,
+    val hops: List<RedirectHop> = emptyList(),
+    val verboseLog: String = "",
+)
 
 class UnsupportedPlatformException(
     val platform: SocialPlatform,
     val verboseLog: String = "",
 ) : Exception("${platform.name} links are currently not supported")
+
+class YouTubeUnavailableException(
+    val reason: String? = null,
+    val verboseLog: String = "",
+) : Exception(reason ?: "YouTube video is unavailable or private")
 
 class XExtractionException(
     val error: XExtractionError,

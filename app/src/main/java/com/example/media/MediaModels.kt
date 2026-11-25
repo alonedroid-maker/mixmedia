@@ -36,6 +36,35 @@ enum class SourceLinkStatus {
     UNKNOWN,
 }
 
+enum class DigitalReleaseStatus {
+    CONFIRMED_DIGITAL,
+    THEATRICAL_ONLY_OR_UNCONFIRMED,
+    UNKNOWN,
+}
+
+enum class TvReleaseStatus {
+    CURRENTLY_AIRING,
+    SEASON_COMPLETED,
+    UPCOMING,
+    ENDED,
+    UNKNOWN,
+}
+
+enum class ProviderCategory {
+    STREAMING,
+    RENTAL_PURCHASE,
+    FREE_AD_SUPPORTED,
+    OFFICIAL_PAGE,
+}
+
+data class WatchProviderInfo(
+    val name: String,
+    val category: ProviderCategory,
+    val logoUrl: String? = null,
+    val url: String? = null,
+    val region: String = "US",
+)
+
 data class MediaSearchResult(
     val id: String,
     val mediaType: MediaType,
@@ -56,6 +85,21 @@ data class MediaSearchResult(
     val tvMazeId: Int? = null,
     val wikidataId: String? = null,
     val relevanceScore: Double = 0.0,
+    val digitalReleaseStatus: DigitalReleaseStatus = DigitalReleaseStatus.UNKNOWN,
+    val digitalReleaseDate: String? = null,
+    val tvReleaseStatus: TvReleaseStatus = TvReleaseStatus.UNKNOWN,
+    val seasonCount: Int? = null,
+    val watchProviders: List<WatchProviderInfo> = emptyList(),
+    val watchProvidersPageUrl: String? = null,
+    val authorizedDirectDownloadUrl: String? = null,
+)
+
+data class TrendingFeedBundle(
+    val movies: List<MediaSearchResult> = emptyList(),
+    val tvShows: List<MediaSearchResult> = emptyList(),
+    val lastUpdatedMillis: Long = 0L,
+    val isUsingFallbackSources: Boolean = false,
+    val attribution: String = "",
 )
 
 data class CastMember(
@@ -115,6 +159,12 @@ data class MediaDetails(
     val tmdbUrl: String? = null,
     val wikipediaUrl: String? = null,
     val sourceAttribution: String = "",
+    val digitalReleaseStatus: DigitalReleaseStatus = DigitalReleaseStatus.UNKNOWN,
+    val digitalReleaseDate: String? = null,
+    val tvReleaseStatus: TvReleaseStatus = TvReleaseStatus.UNKNOWN,
+    val watchProviders: List<WatchProviderInfo> = emptyList(),
+    val watchProvidersPageUrl: String? = null,
+    val authorizedDirectDownloadUrl: String? = null,
 ) {
     fun toSummary(): MediaSearchResult = MediaSearchResult(
         id = id,
@@ -135,6 +185,13 @@ data class MediaDetails(
         tmdbId = tmdbId,
         tvMazeId = tvMazeId,
         wikidataId = wikidataId,
+        digitalReleaseStatus = digitalReleaseStatus,
+        digitalReleaseDate = digitalReleaseDate,
+        tvReleaseStatus = tvReleaseStatus,
+        seasonCount = totalSeasons ?: seasons.size.takeIf { it > 0 },
+        watchProviders = watchProviders,
+        watchProvidersPageUrl = watchProvidersPageUrl,
+        authorizedDirectDownloadUrl = authorizedDirectDownloadUrl,
     )
 }
 
@@ -193,6 +250,7 @@ data class SavedSourcePage(
 data class MediaPreferences(
     val tmdbApiKey: String = "",
     val omdbApiKey: String = "",
+    val youtubeApiKey: String = "",
     val searchLanguage: SearchLanguagePreference = SearchLanguagePreference.BOTH,
     val searchEngine: SearchEngineOption = SearchEngineOption.DUCKDUCKGO,
     val preferInternalBrowser: Boolean = true,
