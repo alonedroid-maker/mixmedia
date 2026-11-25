@@ -51,11 +51,19 @@ data class MovieDiscoveryState(
     val hasSearched: Boolean = false,
     val searchError: String? = null,
     val searchResults: List<MediaSearchResult> = emptyList(),
+    val selectedTypeFilter: MediaType? = null,
+    val discoverFilters: TmdbDiscoverFilters = TmdbDiscoverFilters(),
+    val availableGenres: List<MediaGenre> = emptyList(),
+    val currentPage: Int = 1,
+    val totalPages: Int = 1,
+    val isLoadingMore: Boolean = false,
     val popularFeed: List<MediaSearchResult> = emptyList(),
     val isPopularLoading: Boolean = false,
     val trendingFeed: TrendingFeedBundle = TrendingFeedBundle(),
     val isTrendingLoading: Boolean = false,
     val trendingError: String? = null,
+    val isTmdbBackendActive: Boolean = false,
+    val tmdbBackendDiagnostic: TmdbBackendDiagnostic = TmdbBackendDiagnostic(),
     val favorites: List<MediaSearchResult> = emptyList(),
     val recentlyViewed: List<MediaSearchResult> = emptyList(),
     val recentSearches: List<String> = emptyList(),
@@ -65,6 +73,7 @@ data class MovieDiscoveryState(
     val cacheSizeBytes: Long = 0L,
     val routeStack: List<DiscoveryRoute> = listOf(DiscoveryRoute.HomeSearch),
     val detailsState: DetailsUiState = DetailsUiState.Idle,
+    val isWatchProvidersRefreshing: Boolean = false,
     val sourceState: SourceUiState = SourceUiState.Idle,
     val queryModifiers: QueryModifiers = QueryModifiers(),
     val customSourceQuery: String = "",
@@ -76,6 +85,12 @@ data class MovieDiscoveryState(
 
     val canPopRoute: Boolean
         get() = routeStack.size > 1
+
+    val hasMorePages: Boolean
+        get() = currentPage < totalPages
+
+    val isDiscoverOrSearchActive: Boolean
+        get() = searchQuery.trim().length >= 2 || discoverFilters.hasActiveFilters()
 }
 
 class MovieDiscoveryViewModel(
@@ -88,7 +103,9 @@ class MovieDiscoveryViewModel(
 
     private var persistence: MediaPersistence? = null
     private var searchJob: Job? = null
+    private var loadMoreJob: Job? = null
     private var detailsJob: Job? = null
+    private var providersJob: Job? = null
     private var sourceJob: Job? = null
     private var trendingJob: Job? = null
 
@@ -100,9 +117,12 @@ class MovieDiscoveryViewModel(
 
         val prefs = store.loadPreferences()
         val cachedTrending = store.loadTrendingCache()
+        val backendConfigured = metadataRepo.isTmdbBackendConfigured(prefs)
         _state.update {
             it.copy(
                 preferences = prefs,
+                isTmdbBackendActive = backendConfigured,
+                tmdbBackendDiagnostic = buildInitialDiagnostic(prefs),
                 trendingFeed = cachedTrending ?: TrendingFeedBundle(),
                 favorites = store.loadFavorites(),
                 recentlyViewed = store.loadRecentlyViewed(),
@@ -114,6 +134,28 @@ class MovieDiscoveryViewModel(
         }
         loadTrendingIfNeeded()
         loadPopularFeedIfEmpty()
+        loadGenresIfNeeded()
+    }
+
+    private fun buildInitialDiagnostic(prefs: MediaPreferences): TmdbBackendDiagnostic {
+        val raw = prefs.effectiveProxyBaseUrl()
+        val normalized = TmdbProxyClientFactory.normalizeProxyBaseUrl(raw)
+        val host = normalized?.toHttpUrlOrNull()?.host ?: ""
+        return TmdbBackendDiagnostic(
+            endpointHost = host,
+            isConfigured = normalized != null,
+        )
+    }
+
+    fun loadGenresIfNeeded() {
+        val prefs = _state.value.preferences
+        if (!metadataRepo.isTmdbBackendConfigured(prefs)) return
+        viewModelScope.launch {
+            val genres = metadataRepo.getAvailableGenres(prefs)
+            if (genres.isNotEmpty()) {
+                _state.update { it.copy(availableGenres = genres) }
+            }
+        }
     }
 
     fun loadTrendingIfNeeded(forceRefresh: Boolean = false) {
@@ -152,6 +194,50 @@ class MovieDiscoveryViewModel(
         loadTrendingIfNeeded(forceRefresh = true)
     }
 
+    fun setTrendingWindow(window: TrendingTimeWindow) {
+        if (_state.value.preferences.trendingWindow == window) return
+        updatePreferences { it.copy(trendingWindow = window) }
+    }
+
+    fun setWatchRegion(regionCode: String) {
+        val normalized = WatchRegions.normalize(regionCode)
+        val changed = !_state.value.preferences.watchRegion.equals(normalized, ignoreCase = true)
+        if (changed) {
+            updatePreferences { it.copy(watchRegion = normalized) }
+        }
+        val currentDetails = _state.value.currentRoute as? DiscoveryRoute.Details
+        if (currentDetails != null) {
+            refreshDetailsWatchProviders(currentDetails.summary, normalized)
+        }
+    }
+
+    private fun refreshDetailsWatchProviders(summary: MediaSearchResult, region: String) {
+        providersJob?.cancel()
+        providersJob = viewModelScope.launch {
+            _state.update { it.copy(isWatchProvidersRefreshing = true) }
+            val (providers, pageUrl) = metadataRepo.getWatchProvidersForRegion(
+                summary = summary,
+                region = region,
+                preferences = _state.value.preferences,
+            )
+            _state.update { current ->
+                val updatedDetails = when (val ds = current.detailsState) {
+                    is DetailsUiState.Success -> DetailsUiState.Success(
+                        ds.details.copy(
+                            watchProviders = providers,
+                            watchProvidersPageUrl = pageUrl ?: ds.details.watchProvidersPageUrl,
+                        )
+                    )
+                    else -> ds
+                }
+                current.copy(
+                    detailsState = updatedDetails,
+                    isWatchProvidersRefreshing = false,
+                )
+            }
+        }
+    }
+
     fun loadPopularFeedIfEmpty() {
         val current = _state.value
         if (current.popularFeed.isNotEmpty() || current.isPopularLoading) return
@@ -165,14 +251,17 @@ class MovieDiscoveryViewModel(
     fun onSearchQueryChanged(newQuery: String, triggerImmediately: Boolean = false) {
         _state.update { it.copy(searchQuery = newQuery, searchError = null) }
         searchJob?.cancel()
+        loadMoreJob?.cancel()
         val trimmed = newQuery.trim()
-        if (trimmed.length < 2) {
+        if (trimmed.length < 2 && !_state.value.discoverFilters.hasActiveFilters()) {
             _state.update {
                 it.copy(
                     isSearching = false,
                     hasSearched = false,
                     searchResults = emptyList(),
                     searchError = null,
+                    currentPage = 1,
+                    totalPages = 1,
                 )
             }
             return
@@ -182,16 +271,85 @@ class MovieDiscoveryViewModel(
             if (!triggerImmediately) {
                 delay(420)
             }
-            performSearch(trimmed, saveToHistory = triggerImmediately)
+            performSearchOrDiscover(query = trimmed, page = 1, saveToHistory = triggerImmediately)
         }
     }
 
     fun submitSearch() {
         val trimmed = _state.value.searchQuery.trim()
-        if (trimmed.length < 2) return
+        if (trimmed.length < 2 && !_state.value.discoverFilters.hasActiveFilters()) return
         searchJob?.cancel()
+        loadMoreJob?.cancel()
         searchJob = viewModelScope.launch {
-            performSearch(trimmed, saveToHistory = true)
+            performSearchOrDiscover(query = trimmed, page = 1, saveToHistory = trimmed.length >= 2)
+        }
+    }
+
+    fun setTypeFilter(typeFilter: MediaType?) {
+        if (_state.value.selectedTypeFilter == typeFilter) return
+        _state.update { it.copy(selectedTypeFilter = typeFilter) }
+        if (_state.value.isDiscoverOrSearchActive) {
+            submitSearch()
+        }
+    }
+
+    fun updateDiscoverFilters(transform: (TmdbDiscoverFilters) -> TmdbDiscoverFilters) {
+        val updated = transform(_state.value.discoverFilters)
+        if (updated == _state.value.discoverFilters) return
+        _state.update { it.copy(discoverFilters = updated) }
+        if (_state.value.searchQuery.trim().length >= 2 || updated.hasActiveFilters()) {
+            submitSearch()
+        } else {
+            _state.update {
+                it.copy(
+                    isSearching = false,
+                    hasSearched = false,
+                    searchResults = emptyList(),
+                    searchError = null,
+                    currentPage = 1,
+                    totalPages = 1,
+                )
+            }
+        }
+    }
+
+    fun clearDiscoverFilters() {
+        updateDiscoverFilters { TmdbDiscoverFilters() }
+    }
+
+    fun loadNextSearchPage() {
+        val current = _state.value
+        if (current.isSearching || current.isLoadingMore || !current.hasMorePages) return
+        if (!current.isDiscoverOrSearchActive) return
+        loadMoreJob?.cancel()
+        loadMoreJob = viewModelScope.launch {
+            _state.update { it.copy(isLoadingMore = true) }
+            val nextPage = current.currentPage + 1
+            val res = metadataRepo.searchAndDiscoverMedia(
+                rawQuery = current.searchQuery.trim(),
+                mediaTypeFilter = current.selectedTypeFilter,
+                filters = current.discoverFilters,
+                page = nextPage,
+                preferences = current.preferences,
+            )
+            res.fold(
+                onSuccess = { pageData ->
+                    _state.update { st ->
+                        val existingIds = st.searchResults.mapTo(HashSet()) { it.id }
+                        val appended = pageData.items.filter { existingIds.add(it.id) }
+                        st.copy(
+                            searchResults = st.searchResults + appended,
+                            currentPage = pageData.page,
+                            totalPages = pageData.totalPages,
+                            isLoadingMore = false,
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    if (err is CancellationException) throw err
+                    _state.update { it.copy(isLoadingMore = false) }
+                },
+            )
         }
     }
 
@@ -208,34 +366,53 @@ class MovieDiscoveryViewModel(
 
     fun clearSearchInput() {
         searchJob?.cancel()
+        loadMoreJob?.cancel()
         _state.update {
             it.copy(
                 searchQuery = "",
+                discoverFilters = TmdbDiscoverFilters(),
+                selectedTypeFilter = null,
                 isSearching = false,
+                isLoadingMore = false,
                 hasSearched = false,
                 searchError = null,
                 searchResults = emptyList(),
+                currentPage = 1,
+                totalPages = 1,
             )
         }
     }
 
-    private suspend fun performSearch(query: String, saveToHistory: Boolean) {
+    private suspend fun performSearchOrDiscover(
+        query: String,
+        page: Int,
+        saveToHistory: Boolean,
+    ) {
         _state.update { it.copy(isSearching = true, searchError = null) }
-        if (saveToHistory) {
+        if (saveToHistory && query.length >= 2) {
             recordRecentSearch(query)
         }
-        val result = metadataRepo.searchMedia(query, _state.value.preferences)
+        val current = _state.value
+        val result = metadataRepo.searchAndDiscoverMedia(
+            rawQuery = query,
+            mediaTypeFilter = current.selectedTypeFilter,
+            filters = current.discoverFilters,
+            page = page,
+            preferences = current.preferences,
+        )
         result.fold(
-            onSuccess = { list ->
+            onSuccess = { pageData ->
                 _state.update {
                     it.copy(
                         isSearching = false,
                         hasSearched = true,
-                        searchResults = list,
+                        searchResults = pageData.items,
+                        currentPage = pageData.page,
+                        totalPages = pageData.totalPages,
                         searchError = null,
                     )
                 }
-                if (!saveToHistory && list.isNotEmpty()) {
+                if (!saveToHistory && query.length >= 2 && pageData.items.isNotEmpty()) {
                     recordRecentSearch(query)
                 }
             },
@@ -248,7 +425,7 @@ class MovieDiscoveryViewModel(
                         searchError = err.message ?: "Search failed",
                     )
                 }
-            }
+            },
         )
     }
 
@@ -280,7 +457,7 @@ class MovieDiscoveryViewModel(
                     _state.update {
                         it.copy(detailsState = DetailsUiState.Error(err.message ?: "Unable to load details"))
                     }
-                }
+                },
             )
         }
     }
@@ -436,14 +613,53 @@ class MovieDiscoveryViewModel(
         _state.update { it.copy(pendingBrowserDownload = null) }
     }
 
+    fun updateTmdbProxyUrl(rawUrl: String) {
+        updatePreferences { it.copy(tmdbProxyUrl = rawUrl.trim()) }
+    }
+
+    fun testTmdbBackendConnection(overrideUrl: String? = null) {
+        val targetUrl = overrideUrl?.trim().orEmpty().ifBlank { _state.value.preferences.effectiveProxyBaseUrl() }
+        viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    tmdbBackendDiagnostic = it.tmdbBackendDiagnostic.copy(
+                        isTesting = true,
+                        errorMessage = null,
+                    )
+                )
+            }
+            val result = metadataRepo.testBackendConnection(targetUrl)
+            _state.update { it.copy(tmdbBackendDiagnostic = result) }
+        }
+    }
+
     fun updatePreferences(transform: (MediaPreferences) -> MediaPreferences) {
         val previous = _state.value.preferences
         val updated = transform(previous)
-        _state.update { it.copy(preferences = updated) }
+        val backendConfigured = metadataRepo.isTmdbBackendConfigured(updated)
+        _state.update {
+            it.copy(
+                preferences = updated,
+                isTmdbBackendActive = backendConfigured,
+                tmdbBackendDiagnostic = if (previous.tmdbProxyUrl != updated.tmdbProxyUrl) {
+                    buildInitialDiagnostic(updated)
+                } else {
+                    it.tmdbBackendDiagnostic
+                },
+            )
+        }
         persistence?.savePreferences(updated)
         metadataRepo.clearMemoryCaches()
-        if (previous.tmdbApiKey != updated.tmdbApiKey || previous.searchLanguage != updated.searchLanguage) {
+
+        val trendingInputsChanged = previous.searchLanguage != updated.searchLanguage ||
+            previous.watchRegion != updated.watchRegion ||
+            previous.trendingWindow != updated.trendingWindow ||
+            previous.tmdbProxyUrl != updated.tmdbProxyUrl
+        if (trendingInputsChanged) {
             loadTrendingIfNeeded(forceRefresh = true)
+            if (previous.tmdbProxyUrl != updated.tmdbProxyUrl) {
+                loadGenresIfNeeded()
+            }
         }
     }
 

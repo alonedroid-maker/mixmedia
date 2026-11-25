@@ -1,0 +1,11 @@
+name = "mixmedia-tmdb-proxy"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+[observability]
+enabled = false
+
+# Secrets MUST NEVER be placed in this file.
+# Configure runtime secrets via GitHub Actions -> `wrangler secret put`:
+#   - TMDB_API_READ_ACCESS_TOKEN
+#   - TMDB_API_KEY (optional fallback)

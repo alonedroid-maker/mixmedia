@@ -33,3 +33,17 @@ Both `app/build.gradle.kts` and `.github/workflows/android.yml` read and validat
 2. Commit and push to `main`.
 3. Create and push a matching Git tag (e.g. `git tag v1.2 && git push origin v1.2`).
 4. GitHub Actions automatically builds and signs **`MediaX-v<VERSION_NAME>-release.apk`** using repository secrets (`KEYSTORE_BASE64`, `STORE_PASSWORD`, `KEY_PASSWORD`), generates a `.sha256` checksum, uploads the artifact `MediaX-v<VERSION_NAME>-Signed-Release`, and publishes a GitHub Release on tag push.
+
+## Secure TMDB Proxy Backend (Cloudflare Worker)
+
+MediaX never embeds TMDB credentials inside the Android app, `BuildConfig`, or APK. All TMDB requests go through `/cloudflare-worker`:
+
+1. Configure GitHub Repository Secrets:
+   - `CLOUDFLARE_API_TOKEN`
+   - `CLOUDFLARE_ACCOUNT_ID`
+   - `TMDB_API_READ_ACCESS_TOKEN` (v4 Bearer token, recommended)
+   - `TMDB_API_KEY` (optional v3 fallback)
+2. Run **Actions → Deploy TMDB Cloudflare Worker** (`.github/workflows/deploy-tmdb-worker.yml`) to deploy `mixmedia-tmdb-proxy` and sync secrets directly to Cloudflare Worker Secrets.
+3. Add your public Worker `https://` URL as a GitHub Repository **Variable** named `TMDB_PROXY_BASE_URL` (non-secret) so `.github/workflows/android.yml` embeds only the proxy endpoint URL at build time, or test it in Developer Mode Settings → **TMDB Secure Proxy Backend**.
+4. Attribution: *This product uses the TMDB API but is not endorsed or certified by TMDB. Watch provider availability is powered by JustWatch.*
+

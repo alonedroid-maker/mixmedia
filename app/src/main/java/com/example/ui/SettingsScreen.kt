@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.CastConnected
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Language
@@ -76,6 +77,7 @@ import com.example.download.DownloadSaveLocation
 import com.example.download.QueueConcurrency
 import com.example.media.MediaPreferences
 import com.example.media.MovieDiscoveryState
+import com.example.media.TmdbBackendDiagnostic
 import com.example.network.GitHubUpdateChecker
 import com.example.network.GitHubUpdateResult
 import com.example.ui.theme.ThemeMode
@@ -109,6 +111,8 @@ fun SettingsScreen(
     onClearMediaCache: (() -> Unit)? = null,
     onClearSearchHistory: (() -> Unit)? = null,
     onShowMessage: ((String) -> Unit)? = null,
+    onUpdateTmdbProxyUrl: ((String) -> Unit)? = null,
+    onTestTmdbBackend: ((String?) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var showPasswordDialog by remember { mutableStateOf(false) }
@@ -513,6 +517,16 @@ fun SettingsScreen(
                 }
             }
 
+            if ((state.isDeveloperMode || BuildConfig.DEBUG) && discoveryState != null && onTestTmdbBackend != null) {
+                DeveloperTmdbBackendCard(
+                    proxyUrl = discoveryState.preferences.tmdbProxyUrl,
+                    diagnostic = discoveryState.tmdbBackendDiagnostic,
+                    strings = strings,
+                    onSaveProxyUrl = { url -> onUpdateTmdbProxyUrl?.invoke(url) },
+                    onTestConnection = onTestTmdbBackend,
+                )
+            }
+
             if (discoveryState != null && onUpdateMediaPreferences != null &&
                 onToggleSourceSite != null && onAddCustomSourceSite != null &&
                 onRemoveCustomSourceSite != null && onClearMediaCache != null &&
@@ -839,3 +853,192 @@ private fun DeveloperPasswordDialog(
         },
     )
 }
+
+@Composable
+private fun DeveloperTmdbBackendCard(
+    proxyUrl: String,
+    diagnostic: TmdbBackendDiagnostic,
+    strings: AppStrings,
+    onSaveProxyUrl: (String) -> Unit,
+    onTestConnection: (String?) -> Unit,
+) {
+    var draftUrl by remember(proxyUrl) { mutableStateOf(proxyUrl) }
+
+    val statusText = when {
+        diagnostic.isTesting -> strings.discover.devTmdbTesting
+        !diagnostic.isConfigured -> strings.discover.devTmdbStatusUnconfigured
+        diagnostic.isReachable == true -> strings.discover.devTmdbStatusConnected
+        diagnostic.isReachable == false || !diagnostic.errorMessage.isNullOrBlank() -> strings.discover.devTmdbStatusError
+        else -> strings.discover.devTmdbStatusUnconfigured
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("dev_tmdb_backend_card"),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.CloudDone,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = strings.discover.devTmdbBackendTitle,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+                Surface(
+                    shape = CircleShape,
+                    color = when (diagnostic.isReachable) {
+                        true -> MaterialTheme.colorScheme.secondaryContainer
+                        false -> MaterialTheme.colorScheme.errorContainer
+                        null -> MaterialTheme.colorScheme.surfaceVariant
+                    },
+                ) {
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = when (diagnostic.isReachable) {
+                            true -> MaterialTheme.colorScheme.onSecondaryContainer
+                            false -> MaterialTheme.colorScheme.onErrorContainer
+                            null -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    )
+                }
+            }
+
+            Text(
+                text = strings.discover.devTmdbBackendDesc,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                OutlinedTextField(
+                    value = draftUrl,
+                    onValueChange = { draftUrl = it },
+                    label = { Text(strings.discover.devTmdbProxyUrlLabel) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("dev_tmdb_proxy_url_input"),
+                )
+            }
+
+            Text(
+                text = strings.discover.devTmdbProxyUrlHelper,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = { onSaveProxyUrl(draftUrl) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("dev_save_tmdb_proxy_button"),
+                ) {
+                    Text(strings.discover.devTmdbSaveUrl)
+                }
+
+                Button(
+                    onClick = { onTestConnection(draftUrl.trim().ifBlank { null }) },
+                    enabled = !diagnostic.isTesting,
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("dev_test_tmdb_backend_button"),
+                ) {
+                    if (diagnostic.isTesting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    Text(if (diagnostic.isTesting) strings.discover.devTmdbTesting else strings.discover.devTmdbTestConnection)
+                }
+            }
+
+            if (diagnostic.endpointHost.isNotBlank() ||
+                diagnostic.httpStatus != null ||
+                diagnostic.tmdbSecretConfigured != null ||
+                !diagnostic.errorMessage.isNullOrBlank()
+            ) {
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        if (diagnostic.endpointHost.isNotBlank()) {
+                            Text(
+                                text = "Host: ${diagnostic.endpointHost}",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                        diagnostic.tmdbSecretConfigured?.let { configured ->
+                            Text(
+                                text = if (configured) {
+                                    strings.discover.devTmdbSecretConfiguredYes
+                                } else {
+                                    strings.discover.devTmdbSecretConfiguredNo
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                        val metrics = buildList {
+                            diagnostic.httpStatus?.let { add("HTTP $it") }
+                            diagnostic.latencyMs?.let { add("${it}ms") }
+                            diagnostic.authMode?.let { add("auth=$it") }
+                        }.joinToString(" • ")
+                        if (metrics.isNotBlank()) {
+                            Text(
+                                text = metrics,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (!diagnostic.errorMessage.isNullOrBlank()) {
+                            Text(
+                                text = diagnostic.errorMessage,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

@@ -43,9 +43,11 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -79,6 +81,7 @@ import com.example.media.ProviderCategory
 import com.example.media.SeasonInfo
 import com.example.media.SourceSearchTarget
 import com.example.media.TvReleaseStatus
+import com.example.media.WatchRegions
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -94,6 +97,9 @@ fun MediaDetailsScreen(
     onOpenUrl: (String, String) -> Unit,
     onShareMedia: (String) -> Unit,
     onDownloadAuthorizedUrl: (url: String, fileName: String?) -> Unit = { _, _ -> },
+    watchRegion: String = "US",
+    isWatchProvidersRefreshing: Boolean = false,
+    onSelectWatchRegion: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val details = (detailsState as? DetailsUiState.Success)?.details
@@ -510,6 +516,27 @@ fun MediaDetailsScreen(
                             }
                         }
 
+                        val normalizedRegion = WatchRegions.normalize(watchRegion)
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            items(WatchRegions.SUPPORTED, key = { it.code }) { region ->
+                                FilterChip(
+                                    selected = normalizedRegion.equals(region.code, ignoreCase = true),
+                                    onClick = { onSelectWatchRegion(region.code) },
+                                    label = { Text(region.code, maxLines = 1) },
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .testTag("details_region_${region.code}"),
+                                )
+                            }
+                        }
+
+                        if (isWatchProvidersRefreshing) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+
                         if (providers.isEmpty()) {
                             Text(
                                 text = strings.discover.noVerifiedProviders,
@@ -554,6 +581,20 @@ fun MediaDetailsScreen(
                                     )
                                 }
                             }
+                        }
+
+                        Text(
+                            text = strings.discover.justWatchAttributionText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        )
+                        if (details?.tmdbId != null || summary.tmdbId != null || providers.isNotEmpty()) {
+                            Text(
+                                text = strings.discover.tmdbAttributionText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                modifier = Modifier.testTag("details_tmdb_attribution"),
+                            )
                         }
                     }
                 }

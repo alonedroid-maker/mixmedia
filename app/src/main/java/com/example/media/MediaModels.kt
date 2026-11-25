@@ -94,12 +94,86 @@ data class MediaSearchResult(
     val authorizedDirectDownloadUrl: String? = null,
 )
 
+enum class TrendingTimeWindow(val apiValue: String) {
+    DAY("day"),
+    WEEK("week");
+
+    companion object {
+        fun fromApi(value: String?): TrendingTimeWindow =
+            entries.firstOrNull { it.apiValue.equals(value, ignoreCase = true) } ?: DAY
+    }
+}
+
+data class MediaGenre(
+    val id: Int,
+    val name: String,
+)
+
+data class TmdbDiscoverFilters(
+    val genreId: Int? = null,
+    val minRating: Double? = null,
+    val releaseYear: Int? = null,
+) {
+    fun hasActiveFilters(): Boolean = genreId != null || minRating != null || releaseYear != null
+}
+
+data class MediaSearchPage(
+    val items: List<MediaSearchResult>,
+    val page: Int = 1,
+    val totalPages: Int = 1,
+    val totalResults: Int = items.size,
+    val usedTmdbBackend: Boolean = false,
+) {
+    val hasMorePages: Boolean get() = page < totalPages
+}
+
+data class TmdbBackendDiagnostic(
+    val endpointHost: String = "",
+    val isConfigured: Boolean = false,
+    val isTesting: Boolean = false,
+    val isReachable: Boolean? = null,
+    val tmdbSecretConfigured: Boolean? = null,
+    val authMode: String? = null,
+    val httpStatus: Int? = null,
+    val latencyMs: Long? = null,
+    val checkedAtMillis: Long? = null,
+    val errorMessage: String? = null,
+)
+
+data class WatchRegionOption(
+    val code: String,
+    val labelEn: String,
+    val labelFa: String,
+)
+
+object WatchRegions {
+    val SUPPORTED: List<WatchRegionOption> = listOf(
+        WatchRegionOption("US", "United States (US)", "آمریکا (US)"),
+        WatchRegionOption("GB", "United Kingdom (GB)", "بریتانیا (GB)"),
+        WatchRegionOption("CA", "Canada (CA)", "کانادا (CA)"),
+        WatchRegionOption("DE", "Germany (DE)", "آلمان (DE)"),
+        WatchRegionOption("FR", "France (FR)", "فرانسه (FR)"),
+        WatchRegionOption("AU", "Australia (AU)", "استرالیا (AU)"),
+        WatchRegionOption("AE", "UAE (AE)", "امارات (AE)"),
+        WatchRegionOption("TR", "Turkey (TR)", "ترکیه (TR)"),
+        WatchRegionOption("JP", "Japan (JP)", "ژاپن (JP)"),
+        WatchRegionOption("KR", "South Korea (KR)", "کره جنوبی (KR)"),
+    )
+
+    fun normalize(code: String?): String {
+        val clean = code?.trim()?.uppercase().orEmpty()
+        return if (Regex("^[A-Z]{2}$").matches(clean)) clean else "US"
+    }
+}
+
 data class TrendingFeedBundle(
     val movies: List<MediaSearchResult> = emptyList(),
     val tvShows: List<MediaSearchResult> = emptyList(),
     val lastUpdatedMillis: Long = 0L,
     val isUsingFallbackSources: Boolean = false,
     val attribution: String = "",
+    val window: TrendingTimeWindow = TrendingTimeWindow.DAY,
+    val region: String = "US",
 )
 
 data class CastMember(
@@ -248,14 +322,19 @@ data class SavedSourcePage(
 )
 
 data class MediaPreferences(
-    val tmdbApiKey: String = "",
     val omdbApiKey: String = "",
     val youtubeApiKey: String = "",
     val searchLanguage: SearchLanguagePreference = SearchLanguagePreference.BOTH,
     val searchEngine: SearchEngineOption = SearchEngineOption.DUCKDUCKGO,
     val preferInternalBrowser: Boolean = true,
     val downloadNotificationsEnabled: Boolean = true,
-)
+    val watchRegion: String = "US",
+    val trendingWindow: TrendingTimeWindow = TrendingTimeWindow.DAY,
+    val tmdbProxyUrl: String = "",
+) {
+    fun effectiveProxyBaseUrl(buildConfigDefault: String = com.example.BuildConfig.TMDB_PROXY_BASE_URL): String =
+        tmdbProxyUrl.trim().ifBlank { buildConfigDefault.trim() }
+}
 
 data class ArchiveEntry(
     val title: String,

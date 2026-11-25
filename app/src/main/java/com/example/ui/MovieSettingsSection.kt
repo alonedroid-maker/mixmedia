@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
@@ -27,6 +29,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,6 +63,7 @@ import com.example.media.MediaPreferences
 import com.example.media.SearchEngineOption
 import com.example.media.SearchLanguagePreference
 import com.example.media.SourceSiteConfig
+import com.example.media.WatchRegions
 import com.example.network.VideoLinkExtractor
 
 @Composable
@@ -76,10 +80,8 @@ fun MovieDiscoverySettingsSection(
     onClearSearchHistory: () -> Unit,
     onShowMessage: (String) -> Unit,
 ) {
-    var tmdbDraft by remember(preferences.tmdbApiKey) { mutableStateOf(preferences.tmdbApiKey) }
     var omdbDraft by remember(preferences.omdbApiKey) { mutableStateOf(preferences.omdbApiKey) }
     var youtubeDraft by remember(preferences.youtubeApiKey) { mutableStateOf(preferences.youtubeApiKey) }
-    var showTmdbKey by remember { mutableStateOf(false) }
     var showOmdbKey by remember { mutableStateOf(false) }
     var showYoutubeKey by remember { mutableStateOf(false) }
     var showAddSiteDialog by remember { mutableStateOf(false) }
@@ -91,7 +93,7 @@ fun MovieDiscoverySettingsSection(
         modifier = Modifier.padding(horizontal = 4.dp),
     )
 
-    // API Keys Card (Optional TMDB, OMDb & YouTube Data API)
+    // Optional Third-Party Keys Card (OMDb & YouTube Data API only — TMDB requires no user key)
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -109,40 +111,8 @@ fun MovieDiscoverySettingsSection(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Icon(Icons.Rounded.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Text(strings.discover.tmdbKeyLabel, style = MaterialTheme.typography.titleSmall)
+                Text(strings.discover.omdbKeyLabel, style = MaterialTheme.typography.titleSmall)
             }
-
-            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                OutlinedTextField(
-                    value = tmdbDraft,
-                    onValueChange = {
-                        tmdbDraft = it
-                        onUpdatePreferences { p -> p.copy(tmdbApiKey = it) }
-                    },
-                    label = { Text(strings.discover.tmdbKeyLabel) },
-                    singleLine = true,
-                    visualTransformation = if (showTmdbKey) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        IconButton(onClick = { showTmdbKey = !showTmdbKey }) {
-                            Icon(
-                                imageVector = if (showTmdbKey) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                contentDescription = null,
-                            )
-                        }
-                    },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("settings_tmdb_key_input"),
-                )
-            }
-            Text(
-                text = strings.discover.tmdbKeyHelper,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
 
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                 OutlinedTextField(
@@ -251,6 +221,32 @@ fun MovieDiscoverySettingsSection(
                     ) {
                         Text(engine.displayName, maxLines = 1)
                     }
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+
+            Text(strings.discover.watchRegionLabel, style = MaterialTheme.typography.titleSmall)
+            val isPersianUi = strings.settingsTitle == "تنظیمات"
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                items(WatchRegions.SUPPORTED, key = { it.code }) { region ->
+                    val selected = preferences.watchRegion.equals(region.code, ignoreCase = true)
+                    FilterChip(
+                        selected = selected,
+                        onClick = { onUpdatePreferences { it.copy(watchRegion = region.code) } },
+                        label = {
+                            Text(
+                                text = if (isPersianUi) region.labelFa else region.labelEn,
+                                maxLines = 1,
+                            )
+                        },
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("settings_region_${region.code}"),
+                    )
                 }
             }
 
@@ -454,6 +450,11 @@ fun MovieDiscoverySettingsSection(
                     )
                     Text(
                         text = strings.discover.tmdbAttributionText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                    )
+                    Text(
+                        text = strings.discover.justWatchAttributionText,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
                     )

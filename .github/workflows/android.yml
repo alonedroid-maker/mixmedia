@@ -90,11 +90,19 @@ jobs:
             tr -d '[:space:]' < debug.keystore.base64 | base64 --decode > debug.keystore
           fi
 
+      - name: Audit Client Repo for Zero Embedded TMDB Credentials
+        run: |
+          if grep -rnE "TMDB_API_READ_ACCESS_TOKEN|TMDB_API_KEY|eyJhbGci" app/ .env* gradle/ 2>/dev/null; then
+            echo "ERROR: TMDB credentials must never be committed to Android client files or BuildConfig." >&2
+            exit 1
+          fi
+
       - name: Build Signed Release APK
         env:
           KEYSTORE_PATH: ${{ runner.temp }}/mediax-release.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          TMDB_PROXY_BASE_URL: ${{ vars.TMDB_PROXY_BASE_URL }}
         run: |
           if [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then
             echo "ERROR: STORE_PASSWORD or KEY_PASSWORD secret is missing in GitHub Repository Secrets." >&2

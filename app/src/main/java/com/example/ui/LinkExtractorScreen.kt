@@ -652,6 +652,12 @@ fun MediaXApp(
                                                 openExternalUrl(url)
                                             }
                                         },
+                                        onSelectTrendingWindow = discoveryViewModel::setTrendingWindow,
+                                        onSelectWatchRegion = discoveryViewModel::setWatchRegion,
+                                        onSelectTypeFilter = discoveryViewModel::setTypeFilter,
+                                        onUpdateDiscoverFilters = discoveryViewModel::updateDiscoverFilters,
+                                        onClearDiscoverFilters = discoveryViewModel::clearDiscoverFilters,
+                                        onLoadMore = discoveryViewModel::loadNextSearchPage,
                                     )
                                 }
 
@@ -680,6 +686,9 @@ fun MediaXApp(
                                         onDownloadAuthorizedUrl = { url, name ->
                                             startManualDownload(url, name)
                                         },
+                                        watchRegion = discoveryState.preferences.watchRegion,
+                                        isWatchProvidersRefreshing = discoveryState.isWatchProvidersRefreshing,
+                                        onSelectWatchRegion = discoveryViewModel::setWatchRegion,
                                     )
                                 }
 
@@ -856,6 +865,8 @@ fun MediaXApp(
                                 onClearMediaCache = discoveryViewModel::clearAllCaches,
                                 onClearSearchHistory = discoveryViewModel::clearSearchHistory,
                                 onShowMessage = ::showMessage,
+                                onUpdateTmdbProxyUrl = discoveryViewModel::updateTmdbProxyUrl,
+                                onTestTmdbBackend = discoveryViewModel::testTmdbBackendConnection,
                             )
                         }
                     }

@@ -324,7 +324,7 @@ internal class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
 
     /**
      * Resolves Persian movie/TV queries (e.g. "میان ستاره ای", "برکینگ بد") into exact English titles
-     * and Persian synopses via fa.wikipedia.org without any API key.
+     * and Persian synopses via fa.wikipedia.org and Wikidata wbsearchentities without any API key.
      */
     fun resolvePersianQueryViaWikipedia(query: String): List<WikipediaBridgeHit> {
         val trimmed = query.trim()
@@ -341,16 +341,68 @@ internal class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
         if (hasCloseEnglishBridge) {
             return directHits
         }
+
+        val combined = LinkedHashMap<String, WikipediaBridgeHit>()
+        fun addAllUnique(hits: List<WikipediaBridgeHit>) {
+            for (hit in hits) {
+                val key = (hit.wikidataId ?: hit.englishTitle ?: hit.persianTitle ?: continue).lowercase()
+                if (!combined.containsKey(key)) {
+                    combined[key] = hit
+                }
+            }
+        }
+
+        val wikidataHits = queryWikidataPersianBridge(trimmed)
         val fuzzyQuery = trimmed.split(Regex("\\s+"))
             .filter { it.isNotBlank() }
             .joinToString(" ") { token -> if (token.length >= 4) "$token~1" else token }
-        if (fuzzyQuery.isNotBlank() && fuzzyQuery != trimmed) {
-            val fuzzyHits = queryPersianWikipediaBridge(fuzzyQuery)
-            if (fuzzyHits.isNotEmpty()) {
-                return (fuzzyHits + directHits).distinctBy { it.persianTitle ?: it.englishTitle }
-            }
+        val fuzzyHits = if (fuzzyQuery.isNotBlank() && fuzzyQuery != trimmed) {
+            queryPersianWikipediaBridge(fuzzyQuery)
+        } else {
+            emptyList()
         }
-        return directHits
+
+        // Put high-confidence media entities first, then Wikipedia fuzzy/direct hits
+        addAllUnique(wikidataHits)
+        addAllUnique(fuzzyHits)
+        addAllUnique(directHits)
+        return combined.values.toList()
+    }
+
+    private fun queryWikidataPersianBridge(query: String): List<WikipediaBridgeHit> {
+        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
+        val body = getString(
+            "https://www.wikidata.org/w/api.php?action=wbsearchentities&search=$encoded&language=fa&uselang=en&type=item&limit=6&format=json"
+        ) ?: return emptyList()
+        return try {
+            val arr = JSONObject(body).optJSONArray("search") ?: return emptyList()
+            val scored = (0 until arr.length()).mapNotNull { idx ->
+                val obj = arr.optJSONObject(idx) ?: return@mapNotNull null
+                val qid = obj.optString("id").takeIf { it.startsWith("Q") }
+                val enLabel = obj.optString("label").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val desc = obj.optString("description", "")
+                val faMatched = obj.optJSONObject("match")?.optString("text")?.takeIf { it.isNotBlank() }
+                val isMediaLikely = desc.contains("film", ignoreCase = true) ||
+                    desc.contains("movie", ignoreCase = true) ||
+                    desc.contains("series", ignoreCase = true) ||
+                    desc.contains("television", ignoreCase = true) ||
+                    desc.contains("show", ignoreCase = true) ||
+                    desc.contains("drama", ignoreCase = true) ||
+                    desc.contains("comedy", ignoreCase = true) ||
+                    desc.contains("thriller", ignoreCase = true) ||
+                    desc.contains("anime", ignoreCase = true) ||
+                    desc.contains("documentary", ignoreCase = true)
+                WikipediaBridgeHit(
+                    persianTitle = faMatched ?: query,
+                    englishTitle = cleanWikipediaTitle(enLabel),
+                    persianExtract = null,
+                    wikidataId = qid,
+                ) to isMediaLikely
+            }
+            scored.sortedByDescending { it.second }.map { it.first }
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     private fun queryPersianWikipediaBridge(searchExpression: String): List<WikipediaBridgeHit> {
@@ -389,7 +441,7 @@ internal class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
 
         val joined = URLEncoder.encode(pageTitles.joinToString("|"), "UTF-8")
         val detailBody = getString(
-            "https://fa.wikipedia.org/w/api.php?action=query&titles=$joined&prop=langlinks|extracts|pageprops&lllang=en&exintro=1&explaintext=1&redirects=1&format=json"
+            "https://fa.wikipedia.org/w/api.php?action=query&titles=$joined&prop=langlinks|extracts|pageprops&lllang=en&exintro=1&explaintext=1&exlimit=max&redirects=1&format=json"
         ) ?: return emptyList()
 
         return try {
@@ -755,19 +807,32 @@ internal class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
     }
 
     private fun getString(url: String): String? {
-        return try {
-            val req = Request.Builder()
-                .url(url)
-                .header("User-Agent", USER_AGENT)
-                .header("Accept", "application/json")
-                .build()
-            client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return null
-                resp.body?.string()
+        repeat(2) { attempt ->
+            try {
+                val req = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", USER_AGENT)
+                    .header("Accept", "application/json")
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        return resp.body?.string()
+                    }
+                    if (attempt == 0 && (resp.code == 429 || resp.code >= 500)) {
+                        Thread.sleep(250)
+                    } else {
+                        return null
+                    }
+                }
+            } catch (_: Exception) {
+                if (attempt == 0) {
+                    runCatching { Thread.sleep(200) }
+                } else {
+                    return null
+                }
             }
-        } catch (_: Exception) {
-            null
         }
+        return null
     }
 
     internal fun cleanWikipediaTitle(rawTitle: String): String {

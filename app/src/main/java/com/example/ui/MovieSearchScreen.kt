@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Close
@@ -39,13 +40,14 @@ import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Star
-import androidx.compose.material.icons.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -83,8 +85,11 @@ import com.example.media.MovieDiscoveryState
 import com.example.media.ProviderCategory
 import com.example.media.SavedSourcePage
 import com.example.media.SourceSiteConfig
+import com.example.media.TmdbDiscoverFilters
+import com.example.media.TrendingTimeWindow
 import com.example.media.TvReleaseStatus
 import com.example.media.WatchProviderInfo
+import com.example.media.WatchRegions
 import java.text.DateFormat
 import java.util.Date
 
@@ -109,10 +114,20 @@ fun MovieSearchScreen(
     onOpenQuickSite: (SourceSiteConfig) -> Unit,
     onRefreshTrending: () -> Unit = {},
     onOpenProviderUrl: (url: String, title: String) -> Unit = { _, _ -> },
+    onSelectTrendingWindow: (TrendingTimeWindow) -> Unit = {},
+    onSelectWatchRegion: (String) -> Unit = {},
+    onSelectTypeFilter: (MediaType?) -> Unit = {},
+    onUpdateDiscoverFilters: ((TmdbDiscoverFilters) -> TmdbDiscoverFilters) -> Unit = {},
+    onClearDiscoverFilters: () -> Unit = {},
+    onLoadMore: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val focusManager = LocalFocusManager.current
-    var typeFilter by remember { mutableStateOf(SearchMediaTypeFilter.ALL) }
+    val typeFilter = when (state.selectedTypeFilter) {
+        null -> SearchMediaTypeFilter.ALL
+        MediaType.MOVIE -> SearchMediaTypeFilter.MOVIE
+        MediaType.TV -> SearchMediaTypeFilter.TV
+    }
     val filteredSearchResults = remember(state.searchResults, typeFilter) {
         when (typeFilter) {
             SearchMediaTypeFilter.ALL -> state.searchResults
@@ -212,7 +227,7 @@ fun MovieSearchScreen(
                                     focusManager.clearFocus()
                                     onSubmitSearch()
                                 },
-                                enabled = state.searchQuery.trim().length >= 2 && !state.isSearching,
+                                enabled = (state.searchQuery.trim().length >= 2 || state.discoverFilters.hasActiveFilters()) && !state.isSearching,
                                 modifier = Modifier
                                     .weight(1f)
                                     .heightIn(min = 48.dp)
@@ -232,6 +247,13 @@ fun MovieSearchScreen(
                                 Text(strings.discover.actionSearchMovies)
                             }
                         }
+
+                        DiscoverFilterChipsRow(
+                            state = state,
+                            strings = strings,
+                            onUpdateDiscoverFilters = onUpdateDiscoverFilters,
+                            onClearDiscoverFilters = onClearDiscoverFilters,
+                        )
 
                         if (state.recentSearches.isNotEmpty()) {
                             LazyRow(
@@ -277,7 +299,7 @@ fun MovieSearchScreen(
                 }
             }
 
-            if (state.searchQuery.trim().length >= 2) {
+            if (state.isDiscoverOrSearchActive) {
                 when {
                     state.isSearching && state.searchResults.isEmpty() -> {
                         item(key = "search_loading") {
@@ -361,10 +383,17 @@ fun MovieSearchScreen(
                                     }
                                     FilterChip(
                                         selected = typeFilter == option,
-                                        onClick = { typeFilter = option },
+                                        onClick = {
+                                            val mapped = when (option) {
+                                                SearchMediaTypeFilter.ALL -> null
+                                                SearchMediaTypeFilter.MOVIE -> MediaType.MOVIE
+                                                SearchMediaTypeFilter.TV -> MediaType.TV
+                                            }
+                                            onSelectTypeFilter(mapped)
+                                        },
                                         label = { Text("$label ($count)") },
                                         modifier = Modifier
-                                            .heightIn(min = 40.dp)
+                                            .heightIn(min = 48.dp)
                                             .testTag("filter_type_${option.name.lowercase()}"),
                                     )
                                 }
@@ -390,6 +419,41 @@ fun MovieSearchScreen(
                                     onToggleFavorite = { onToggleFavorite(item) },
                                 )
                             }
+
+                            if (state.hasMorePages) {
+                                item(key = "discover_load_more") {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 8.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        Text(
+                                            text = strings.discover.pageIndicator(state.currentPage, state.totalPages),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        OutlinedButton(
+                                            onClick = onLoadMore,
+                                            enabled = !state.isLoadingMore && !state.isSearching,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(min = 48.dp)
+                                                .testTag("discover_load_more_button"),
+                                        ) {
+                                            if (state.isLoadingMore) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(16.dp),
+                                                    strokeWidth = 2.dp,
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                            }
+                                            Text(strings.discover.actionLoadMore)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -407,7 +471,7 @@ fun MovieSearchScreen(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                 Icon(
-                                    imageVector = Icons.Rounded.TrendingUp,
+                                    imageVector = Icons.AutoMirrored.Rounded.TrendingUp,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(18.dp),
@@ -444,6 +508,63 @@ fun MovieSearchScreen(
                             }
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(strings.discover.trendingRefreshAction)
+                        }
+                    }
+                }
+
+                item(key = "trending_controls_row") {
+                    var regionMenuExpanded by remember { mutableStateOf(false) }
+                    val currentWindow = state.preferences.trendingWindow
+                    val currentRegion = WatchRegions.normalize(state.preferences.watchRegion)
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        item(key = "tw_day") {
+                            FilterChip(
+                                selected = currentWindow == TrendingTimeWindow.DAY,
+                                onClick = { onSelectTrendingWindow(TrendingTimeWindow.DAY) },
+                                label = { Text(strings.discover.trendingWindowDay) },
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("trending_window_day"),
+                            )
+                        }
+                        item(key = "tw_week") {
+                            FilterChip(
+                                selected = currentWindow == TrendingTimeWindow.WEEK,
+                                onClick = { onSelectTrendingWindow(TrendingTimeWindow.WEEK) },
+                                label = { Text(strings.discover.trendingWindowWeek) },
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("trending_window_week"),
+                            )
+                        }
+                        item(key = "tw_region") {
+                            Box {
+                                FilterChip(
+                                    selected = true,
+                                    onClick = { regionMenuExpanded = true },
+                                    label = { Text("${strings.discover.watchRegionLabel}: $currentRegion") },
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .testTag("trending_region_chip"),
+                                )
+                                DropdownMenu(
+                                    expanded = regionMenuExpanded,
+                                    onDismissRequest = { regionMenuExpanded = false },
+                                ) {
+                                    WatchRegions.SUPPORTED.forEach { region ->
+                                        DropdownMenuItem(
+                                            text = { Text(region.labelEn) },
+                                            onClick = {
+                                                regionMenuExpanded = false
+                                                onSelectWatchRegion(region.code)
+                                            },
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -643,7 +764,170 @@ fun MovieSearchScreen(
                 }
             }
 
+            if (!state.trendingFeed.isUsingFallbackSources || state.searchResults.any { it.tmdbId != null }) {
+                item(key = "discover_tmdb_attribution") {
+                    Text(
+                        text = strings.discover.tmdbAttributionText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                        modifier = Modifier
+                            .padding(horizontal = 4.dp)
+                            .testTag("discover_tmdb_attribution"),
+                    )
+                }
+            }
+
             item { Spacer(modifier = Modifier.height(16.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun DiscoverFilterChipsRow(
+    state: MovieDiscoveryState,
+    strings: AppStrings,
+    onUpdateDiscoverFilters: ((TmdbDiscoverFilters) -> TmdbDiscoverFilters) -> Unit,
+    onClearDiscoverFilters: () -> Unit,
+) {
+    var genreMenuExpanded by remember { mutableStateOf(false) }
+    var ratingMenuExpanded by remember { mutableStateOf(false) }
+    var yearMenuExpanded by remember { mutableStateOf(false) }
+
+    val filters = state.discoverFilters
+    val selectedGenreName = remember(filters.genreId, state.availableGenres) {
+        state.availableGenres.firstOrNull { it.id == filters.genreId }?.name
+    }
+    val ratingOptions = remember { listOf<Double?>(null, 6.0, 7.0, 8.0) }
+    val yearOptions = remember { listOf<Int?>(null, 2026, 2025, 2024, 2023, 2022, 2020, 2015, 2010) }
+
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        if (state.availableGenres.isNotEmpty()) {
+            item(key = "filter_genre") {
+                Box {
+                    FilterChip(
+                        selected = filters.genreId != null,
+                        onClick = { genreMenuExpanded = true },
+                        label = {
+                            Text(selectedGenreName ?: strings.discover.filterGenreLabel, maxLines = 1)
+                        },
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("discover_filter_genre"),
+                    )
+                    DropdownMenu(
+                        expanded = genreMenuExpanded,
+                        onDismissRequest = { genreMenuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(strings.discover.filterAllGenres) },
+                            onClick = {
+                                genreMenuExpanded = false
+                                onUpdateDiscoverFilters { it.copy(genreId = null) }
+                            },
+                        )
+                        state.availableGenres.forEach { genre ->
+                            DropdownMenuItem(
+                                text = { Text(genre.name) },
+                                onClick = {
+                                    genreMenuExpanded = false
+                                    onUpdateDiscoverFilters { it.copy(genreId = genre.id) }
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        item(key = "filter_rating") {
+            Box {
+                FilterChip(
+                    selected = filters.minRating != null,
+                    onClick = { ratingMenuExpanded = true },
+                    label = {
+                        Text(
+                            text = filters.minRating?.let { "${strings.discover.filterMinRatingLabel}: ${it}+" }
+                                ?: strings.discover.filterMinRatingLabel,
+                            maxLines = 1,
+                        )
+                    },
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("discover_filter_rating"),
+                )
+                DropdownMenu(
+                    expanded = ratingMenuExpanded,
+                    onDismissRequest = { ratingMenuExpanded = false },
+                ) {
+                    ratingOptions.forEach { minRating ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(minRating?.let { "$it+" } ?: strings.discover.filterAnyRating)
+                            },
+                            onClick = {
+                                ratingMenuExpanded = false
+                                onUpdateDiscoverFilters { it.copy(minRating = minRating) }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
+        item(key = "filter_year") {
+            Box {
+                FilterChip(
+                    selected = filters.releaseYear != null,
+                    onClick = { yearMenuExpanded = true },
+                    label = {
+                        Text(
+                            text = filters.releaseYear?.toString() ?: strings.discover.filterYearLabel,
+                            maxLines = 1,
+                        )
+                    },
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("discover_filter_year"),
+                )
+                DropdownMenu(
+                    expanded = yearMenuExpanded,
+                    onDismissRequest = { yearMenuExpanded = false },
+                ) {
+                    yearOptions.forEach { year ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(year?.toString() ?: strings.discover.filterAllYears)
+                            },
+                            onClick = {
+                                yearMenuExpanded = false
+                                onUpdateDiscoverFilters { it.copy(releaseYear = year) }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
+        if (filters.hasActiveFilters()) {
+            item(key = "filter_clear") {
+                AssistChip(
+                    onClick = onClearDiscoverFilters,
+                    label = { Text(strings.discover.filterClearFilters) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Clear,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    },
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("discover_filter_clear"),
+                )
+            }
         }
     }
 }

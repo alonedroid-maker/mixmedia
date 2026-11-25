@@ -9,6 +9,7 @@ import com.example.media.MediaType
 import com.example.media.MetadataRepository
 import com.example.media.ProviderCategory
 import com.example.media.SearchLanguagePreference
+import com.example.media.TrendingTimeWindow
 import com.example.media.TvReleaseStatus
 import com.example.network.CurlRedirectResolver
 import com.example.network.YouTubeExtractor
@@ -52,9 +53,15 @@ class TrendingAndComplianceTest {
             .addInterceptor(Interceptor { chain ->
                 val req = chain.request()
                 val url = req.url.toString()
+                assertNull("Android client must never send Authorization headers to proxy", req.header("Authorization"))
+                assertFalse("Android client must never send api_key query param", url.contains("api_key", ignoreCase = true))
+                assertFalse("Android client must never call api.themoviedb.org directly", url.contains("api.themoviedb.org"))
                 val body = when {
-                    url.contains("/trending/movie/week") -> """
+                    url.contains("/v1/trending/movie/week") -> """
                         {
+                          "page": 1,
+                          "total_pages": 1,
+                          "total_results": 4,
                           "results": [
                             { "id": 101 },
                             { "id": 102 },
@@ -64,10 +71,10 @@ class TrendingAndComplianceTest {
                         }
                     """.trimIndent()
 
-                    url.contains("/discover/movie") -> """{ "results": [] }"""
+                    url.contains("/v1/discover/movie") -> """{ "page": 1, "total_pages": 1, "results": [] }"""
 
                     // 101: Theatrical only (type 3) + no watch/providers -> MUST be excluded
-                    url.contains("/movie/101?") -> """
+                    url.contains("/v1/movie/101") -> """
                         {
                           "id": 101,
                           "title": "Cinema Only Film",
@@ -87,7 +94,7 @@ class TrendingAndComplianceTest {
                     """.trimIndent()
 
                     // 102: Confirmed digital release date (type 4 <= today) + Netflix
-                    url.contains("/movie/102?") -> """
+                    url.contains("/v1/movie/102") -> """
                         {
                           "id": 102,
                           "title": "Streaming Hit",
@@ -118,7 +125,7 @@ class TrendingAndComplianceTest {
                     """.trimIndent()
 
                     // 103: Future digital date (2099) + no providers -> MUST be excluded
-                    url.contains("/movie/103?") -> """
+                    url.contains("/v1/movie/103") -> """
                         {
                           "id": 103,
                           "title": "Future Release",
@@ -138,7 +145,7 @@ class TrendingAndComplianceTest {
                     """.trimIndent()
 
                     // 104: No release_dates digital entry, but has verified watch/providers -> MUST be included
-                    url.contains("/movie/104?") -> """
+                    url.contains("/v1/movie/104") -> """
                         {
                           "id": 104,
                           "title": "Provider Confirmed Movie",
@@ -154,9 +161,9 @@ class TrendingAndComplianceTest {
                         }
                     """.trimIndent()
 
-                    url.contains("/trending/tv/week") -> """{ "results": [{ "id": 201 }] }"""
+                    url.contains("/v1/trending/tv/week") -> """{ "page": 1, "total_pages": 1, "results": [{ "id": 201 }] }"""
 
-                    url.contains("/tv/201?") -> """
+                    url.contains("/v1/tv/201") -> """
                         {
                           "id": 201,
                           "name": "Dark Matter Series",
@@ -190,7 +197,8 @@ class TrendingAndComplianceTest {
         val repo = MetadataRepository(mockClient)
         val bundle = repo.getTrendingFeed(
             preferences = MediaPreferences(
-                tmdbApiKey = "test_tmdb_key",
+                tmdbProxyUrl = "https://proxy.example.workers.dev",
+                trendingWindow = TrendingTimeWindow.WEEK,
                 searchLanguage = SearchLanguagePreference.EN,
             ),
             persistence = null,
@@ -333,7 +341,7 @@ class TrendingAndComplianceTest {
         val repo = MetadataRepository(mockClient)
         val t0 = 1_700_000_000_000L
         val first = repo.getTrendingFeed(
-            preferences = MediaPreferences(tmdbApiKey = ""),
+            preferences = MediaPreferences(tmdbProxyUrl = ""),
             persistence = persistence,
             forceRefresh = false,
             nowMillis = t0,
@@ -355,7 +363,7 @@ class TrendingAndComplianceTest {
         // Within 30-min cache window: should hit memory/disk cache without network calls
         val repoReloaded = MetadataRepository(mockClient)
         val cached = repoReloaded.getTrendingFeed(
-            preferences = MediaPreferences(tmdbApiKey = ""),
+            preferences = MediaPreferences(tmdbProxyUrl = ""),
             persistence = persistence,
             forceRefresh = false,
             nowMillis = t0 + 10L * 60L * 1000L,
@@ -366,7 +374,7 @@ class TrendingAndComplianceTest {
         // Manual refresh bypasses 30-min cache and updates timestamp
         val t1 = t0 + 5L * 60L * 1000L
         val refreshed = repoReloaded.getTrendingFeed(
-            preferences = MediaPreferences(tmdbApiKey = ""),
+            preferences = MediaPreferences(tmdbProxyUrl = ""),
             persistence = persistence,
             forceRefresh = true,
             nowMillis = t1,
@@ -395,9 +403,23 @@ class TrendingAndComplianceTest {
             assertTrue(s.discover.trendingSectionTitle.isNotBlank())
             assertTrue(s.discover.trendingMoviesTitle.isNotBlank())
             assertTrue(s.discover.trendingTvTitle.isNotBlank())
+            assertTrue(s.discover.trendingWindowDay.isNotBlank())
+            assertTrue(s.discover.trendingWindowWeek.isNotBlank())
             assertTrue(s.discover.trendingRefreshAction.isNotBlank())
             assertTrue(s.discover.trendingLastUpdated("12:00").isNotBlank())
             assertTrue(s.discover.trendingFallbackNotice.isNotBlank())
+            assertFalse(s.discover.trendingFallbackNotice.contains("API key", ignoreCase = true))
+            assertTrue(s.discover.watchRegionLabel.isNotBlank())
+            assertTrue(s.discover.justWatchAttributionText.contains("JustWatch"))
+            assertTrue(
+                s.discover.tmdbAttributionText.contains(
+                    "This product uses the TMDB API but is not endorsed or certified by TMDB."
+                )
+            )
+            assertTrue(s.discover.filterGenreLabel.isNotBlank())
+            assertTrue(s.discover.filterMinRatingLabel.isNotBlank())
+            assertTrue(s.discover.filterYearLabel.isNotBlank())
+            assertTrue(s.discover.actionLoadMore.isNotBlank())
             assertTrue(s.discover.statusDigitalReleased.isNotBlank())
             assertTrue(s.discover.statusTvAiring.isNotBlank())
             assertTrue(s.discover.statusTvSeasonCompleted.isNotBlank())

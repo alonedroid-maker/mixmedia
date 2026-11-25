@@ -20,25 +20,35 @@ class MediaPersistence(context: Context) {
     private val sourceSitesFile = File(mediaDir, "source_sites.json")
     private val trendingCacheFile = File(cacheDir, "trending_cache.json")
 
-    fun loadPreferences(): MediaPreferences = MediaPreferences(
-        tmdbApiKey = prefs.getString(KEY_TMDB_API_KEY, "") ?: "",
-        omdbApiKey = prefs.getString(KEY_OMDB_API_KEY, "") ?: "",
-        youtubeApiKey = prefs.getString(KEY_YOUTUBE_API_KEY, "") ?: "",
-        searchLanguage = SearchLanguagePreference.fromCode(prefs.getString(KEY_SEARCH_LANG, null)),
-        searchEngine = SearchEngineOption.fromCode(prefs.getString(KEY_SEARCH_ENGINE, null)),
-        preferInternalBrowser = prefs.getBoolean(KEY_PREFER_INTERNAL_BROWSER, true),
-        downloadNotificationsEnabled = prefs.getBoolean(KEY_DOWNLOAD_NOTIFICATIONS, true),
-    )
+    fun loadPreferences(): MediaPreferences {
+        if (prefs.contains(LEGACY_KEY_TMDB_API_KEY)) {
+            prefs.edit().remove(LEGACY_KEY_TMDB_API_KEY).apply()
+        }
+        return MediaPreferences(
+            omdbApiKey = prefs.getString(KEY_OMDB_API_KEY, "") ?: "",
+            youtubeApiKey = prefs.getString(KEY_YOUTUBE_API_KEY, "") ?: "",
+            searchLanguage = SearchLanguagePreference.fromCode(prefs.getString(KEY_SEARCH_LANG, null)),
+            searchEngine = SearchEngineOption.fromCode(prefs.getString(KEY_SEARCH_ENGINE, null)),
+            preferInternalBrowser = prefs.getBoolean(KEY_PREFER_INTERNAL_BROWSER, true),
+            downloadNotificationsEnabled = prefs.getBoolean(KEY_DOWNLOAD_NOTIFICATIONS, true),
+            watchRegion = WatchRegions.normalize(prefs.getString(KEY_WATCH_REGION, "US")),
+            trendingWindow = TrendingTimeWindow.fromApi(prefs.getString(KEY_TRENDING_WINDOW, null)),
+            tmdbProxyUrl = prefs.getString(KEY_TMDB_PROXY_URL, "") ?: "",
+        )
+    }
 
     fun savePreferences(preferences: MediaPreferences) {
         prefs.edit()
-            .putString(KEY_TMDB_API_KEY, preferences.tmdbApiKey.trim())
+            .remove(LEGACY_KEY_TMDB_API_KEY)
             .putString(KEY_OMDB_API_KEY, preferences.omdbApiKey.trim())
             .putString(KEY_YOUTUBE_API_KEY, preferences.youtubeApiKey.trim())
             .putString(KEY_SEARCH_LANG, preferences.searchLanguage.code)
             .putString(KEY_SEARCH_ENGINE, preferences.searchEngine.code)
             .putBoolean(KEY_PREFER_INTERNAL_BROWSER, preferences.preferInternalBrowser)
             .putBoolean(KEY_DOWNLOAD_NOTIFICATIONS, preferences.downloadNotificationsEnabled)
+            .putString(KEY_WATCH_REGION, WatchRegions.normalize(preferences.watchRegion))
+            .putString(KEY_TRENDING_WINDOW, preferences.trendingWindow.apiValue)
+            .putString(KEY_TMDB_PROXY_URL, preferences.tmdbProxyUrl.trim())
             .apply()
     }
 
@@ -216,6 +226,8 @@ class MediaPersistence(context: Context) {
                 lastUpdatedMillis = root.optLong("lastUpdatedMillis", 0L),
                 isUsingFallbackSources = root.optBoolean("isUsingFallbackSources", false),
                 attribution = root.optString("attribution", ""),
+                window = TrendingTimeWindow.fromApi(root.optString("window", TrendingTimeWindow.DAY.apiValue)),
+                region = WatchRegions.normalize(root.optString("region", "US")),
             )
         } catch (_: Exception) {
             null
@@ -235,6 +247,8 @@ class MediaPersistence(context: Context) {
             put("lastUpdatedMillis", bundle.lastUpdatedMillis)
             put("isUsingFallbackSources", bundle.isUsingFallbackSources)
             put("attribution", bundle.attribution)
+            put("window", bundle.window.apiValue)
+            put("region", WatchRegions.normalize(bundle.region))
         }
         atomicWrite(trendingCacheFile, root.toString())
     }
@@ -409,13 +423,16 @@ class MediaPersistence(context: Context) {
 
     companion object {
         private const val PREFS_NAME = "fixlink_media_prefs"
-        private const val KEY_TMDB_API_KEY = "tmdb_api_key"
+        private const val LEGACY_KEY_TMDB_API_KEY = "tmdb_api_key"
         private const val KEY_OMDB_API_KEY = "omdb_api_key"
         private const val KEY_YOUTUBE_API_KEY = "youtube_api_key"
         private const val KEY_SEARCH_LANG = "search_language"
         private const val KEY_SEARCH_ENGINE = "search_engine"
         private const val KEY_PREFER_INTERNAL_BROWSER = "prefer_internal_browser"
         private const val KEY_DOWNLOAD_NOTIFICATIONS = "download_notifications_enabled"
+        private const val KEY_WATCH_REGION = "watch_region"
+        private const val KEY_TRENDING_WINDOW = "trending_window"
+        private const val KEY_TMDB_PROXY_URL = "tmdb_proxy_url"
         private const val MAX_SAVED_ITEMS = 50
         private const val MAX_HISTORY_ITEMS = 15
 

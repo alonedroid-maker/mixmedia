@@ -42,6 +42,14 @@ android {
     versionCode = releaseVersionCode
     versionName = releaseVersionName
 
+    val proxyBaseUrlRaw = System.getenv("TMDB_PROXY_BASE_URL")?.trim().orEmpty()
+    val safeProxyBaseUrl = if (proxyBaseUrlRaw.startsWith("https://")) {
+      proxyBaseUrlRaw.replace("\"", "\\\"")
+    } else {
+      ""
+    }
+    buildConfigField("String", "TMDB_PROXY_BASE_URL", "\"$safeProxyBaseUrl\"")
+
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
@@ -129,7 +137,7 @@ dependencies {
   // implementation(libs.androidx.room.ktx)
   // implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
-  // implementation(libs.converter.moshi)
+  implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
   // Uncomment to use Firestore:
   // implementation(libs.firebase.firestore)
@@ -145,10 +153,10 @@ dependencies {
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   // implementation(libs.logging.interceptor)
-  // implementation(libs.moshi.kotlin)
+  implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
-  // implementation(libs.retrofit)
+  implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
