@@ -162,7 +162,7 @@ class GitHubUpdateChecker(
         val req = Request.Builder()
             .url(url)
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "MIxmedia-Android")
+            .header("User-Agent", "MediaX-Android")
             .build()
         client.newCall(req).execute().use { resp ->
             if (resp.code == 404) return null
@@ -176,7 +176,7 @@ class GitHubUpdateChecker(
         val req = Request.Builder()
             .url(url)
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "MIxmedia-Android")
+            .header("User-Agent", "MediaX-Android")
             .build()
         client.newCall(req).execute().use { resp ->
             if (resp.code == 404) return null

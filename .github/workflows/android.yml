@@ -1,4 +1,4 @@
-name: Build MIxmedia Signed Release
+name: Build MediaX Signed Release
 
 on:
   workflow_dispatch:
@@ -20,6 +20,51 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Parse and Validate release-info.properties
+        id: release_info
+        run: |
+          python3 - << 'PY'
+          import os
+          import sys
+
+          path = "release-info.properties"
+          if not os.path.isfile(path):
+              sys.stderr.write("ERROR: release-info.properties not found at repository root.\n")
+              sys.exit(1)
+
+          data = {}
+          with open(path, "r", encoding="utf-8") as fh:
+              for raw in fh:
+                  line = raw.strip()
+                  if not line or line.startswith("#") or line.startswith("!"):
+                      continue
+                  if "=" not in line:
+                      continue
+                  k, v = line.split("=", 1)
+                  data[k.strip()] = v.strip()
+
+          version_name = data.get("VERSION_NAME", "")
+          version_code = data.get("VERSION_CODE", "")
+          release_title = data.get("RELEASE_TITLE", f"MediaX v{version_name}")
+          release_notes = data.get("RELEASE_NOTES", "")
+
+          if not version_name:
+              sys.stderr.write("ERROR: VERSION_NAME in release-info.properties is empty.\n")
+              sys.exit(1)
+          if not version_code.isdigit() or int(version_code) <= 0:
+              sys.stderr.write(f"ERROR: VERSION_CODE must be a positive integer, got '{version_code}'.\n")
+              sys.exit(1)
+
+          out_path = os.environ["GITHUB_OUTPUT"]
+          with open(out_path, "a", encoding="utf-8") as out:
+              out.write(f"version_name={version_name}\n")
+              out.write(f"version_code={version_code}\n")
+              out.write(f"release_title={release_title}\n")
+              out.write("release_notes<<EOF_RELEASE_NOTES\n")
+              out.write(f"{release_notes}\n")
+              out.write("EOF_RELEASE_NOTES\n")
+          PY
+
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -39,15 +84,15 @@ jobs:
             echo "ERROR: KEYSTORE_BASE64 secret is missing in GitHub Repository Secrets." >&2
             exit 1
           fi
-          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/mixmedia-release.jks"
-          test -s "$RUNNER_TEMP/mixmedia-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/mediax-release.jks"
+          test -s "$RUNNER_TEMP/mediax-release.jks"
           if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
             tr -d '[:space:]' < debug.keystore.base64 | base64 --decode > debug.keystore
           fi
 
       - name: Build Signed Release APK
         env:
-          KEYSTORE_PATH: ${{ runner.temp }}/mixmedia-release.jks
+          KEYSTORE_PATH: ${{ runner.temp }}/mediax-release.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
@@ -58,23 +103,23 @@ jobs:
           gradle --no-daemon clean assembleRelease
 
       - name: Verify APK Signature & Package Output
+        env:
+          VERSION_NAME: ${{ steps.release_info.outputs.version_name }}
         run: |
           APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           test -n "$APK"
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
           test -n "$APKSIGNER"
           "$APKSIGNER" verify --verbose --print-certs "$APK"
-          VERSION=$(grep -oE 'versionName\s*=\s*"[^"]+"' app/build.gradle.kts | head -n 1 | cut -d'"' -f2)
-          VERSION=${VERSION:-1.1}
           mkdir -p release-output
-          OUT_APK="release-output/MIxmedia-v${VERSION}-release.apk"
+          OUT_APK="release-output/MediaX-v${VERSION_NAME}-release.apk"
           cp "$APK" "$OUT_APK"
           sha256sum "$OUT_APK" > "${OUT_APK}.sha256"
 
-      - name: Upload MIxmedia Signed APK Artifact
+      - name: Upload MediaX Signed APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MIxmedia-Signed-Release
+          name: MediaX-v${{ steps.release_info.outputs.version_name }}-Signed-Release
           path: release-output/*
           if-no-files-found: error
           retention-days: 30
@@ -83,5 +128,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ steps.release_info.outputs.release_title }}
+          body: ${{ steps.release_info.outputs.release_notes }}
           files: release-output/*
-          generate_release_notes: true

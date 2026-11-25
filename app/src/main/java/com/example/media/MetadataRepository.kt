@@ -718,7 +718,7 @@ class MetadataRepository(
         return try {
             val req = Request.Builder()
                 .url(url)
-                .header("User-Agent", "MIxmediaAndroid/1.1")
+                .header("User-Agent", "MediaXAndroid/1.1")
                 .header("Accept", "application/json")
                 .build()
             client.newCall(req).execute().use { resp ->

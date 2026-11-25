@@ -1,6 +1,6 @@
 {
-  "name": "MIxmedia",
-  "description": "MIxmedia: Smart movie & TV finder, integrated WebView browser, direct video link resolver, and multi-connection download manager",
+  "name": "MediaX",
+  "description": "MediaX: Smart movie & TV finder, integrated WebView browser, direct video link resolver, and multi-connection download manager",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

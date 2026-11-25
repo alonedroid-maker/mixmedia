@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "MIxmedia"
+rootProject.name = "MediaX"
 
 include(":app")

@@ -8,15 +8,18 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.download.DownloadForegroundService
 import com.example.download.DownloadManagerHolder
 import com.example.intent.VlcIntentHelper
 import com.example.media.MovieDiscoveryViewModel
 import com.example.ui.AppDestination
 import com.example.ui.AppLanguage
-import com.example.ui.FiXLinkApp
 import com.example.ui.LinkExtractorViewModel
-import com.example.ui.theme.LinkYabTheme
+import com.example.ui.MediaXApp
+import com.example.ui.theme.MediaXTheme
+import com.example.ui.theme.ThemeMode
 
 class MainActivity : ComponentActivity() {
 
@@ -38,24 +41,30 @@ class MainActivity : ComponentActivity() {
             val savedLangCode = prefs.getString(KEY_LANGUAGE, AppLanguage.EN.code)
             val savedLanguage = AppLanguage.entries.firstOrNull { it.code == savedLangCode } ?: AppLanguage.EN
             val savedDevMode = prefs.getBoolean(KEY_DEV_MODE, false)
+            val savedThemeMode = ThemeMode.fromCode(prefs.getString(KEY_THEME_MODE, ThemeMode.SYSTEM.code))
 
             viewModel.initializePreferences(
                 language = savedLanguage,
                 vlcEnabled = VlcIntentHelper.isVlcInterceptorEnabled(this),
                 vlcInstalled = VlcIntentHelper.isVlcInstalled(this),
                 developerMode = savedDevMode,
+                themeMode = savedThemeMode,
             )
             handleIncomingIntent(intent)
         }
 
         setContent {
-            LinkYabTheme {
-                FiXLinkApp(
+            val screenState by viewModel.screenState.collectAsStateWithLifecycle()
+            MediaXTheme(themeMode = screenState.themeMode) {
+                MediaXApp(
                     viewModel = viewModel,
                     discoveryViewModel = discoveryViewModel,
                     downloadEngine = downloadEngine,
                     onLanguagePersisted = { lang ->
                         prefs.edit().putString(KEY_LANGUAGE, lang.code).apply()
+                    },
+                    onThemeModePersisted = { mode ->
+                        prefs.edit().putString(KEY_THEME_MODE, mode.code).apply()
                     },
                     onDeveloperModePersisted = { enabled ->
                         prefs.edit().putBoolean(KEY_DEV_MODE, enabled).apply()
@@ -101,6 +110,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val PREFS_NAME = "fixlink_prefs"
         private const val KEY_LANGUAGE = "app_language"
+        private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_DEV_MODE = "developer_mode"
     }
 }

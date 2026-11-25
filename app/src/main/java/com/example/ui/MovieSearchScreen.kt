@@ -51,10 +51,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -62,11 +67,18 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.media.MediaSearchResult
 import com.example.media.MediaType
 import com.example.media.MovieDiscoveryState
 import com.example.media.SavedSourcePage
 import com.example.media.SourceSiteConfig
+
+enum class SearchMediaTypeFilter {
+    ALL,
+    MOVIE,
+    TV,
+}
 
 @Composable
 fun MovieSearchScreen(
@@ -84,6 +96,14 @@ fun MovieSearchScreen(
     modifier: Modifier = Modifier,
 ) {
     val focusManager = LocalFocusManager.current
+    var typeFilter by remember { mutableStateOf(SearchMediaTypeFilter.ALL) }
+    val filteredSearchResults = remember(state.searchResults, typeFilter) {
+        when (typeFilter) {
+            SearchMediaTypeFilter.ALL -> state.searchResults
+            SearchMediaTypeFilter.MOVIE -> state.searchResults.filter { it.mediaType == MediaType.MOVIE }
+            SearchMediaTypeFilter.TV -> state.searchResults.filter { it.mediaType == MediaType.TV }
+        }
+    }
 
     Box(
         modifier = modifier.fillMaxSize(),
@@ -310,14 +330,50 @@ fun MovieSearchScreen(
                     }
 
                     else -> {
-                        items(state.searchResults, key = { it.id }) { item ->
-                            MediaResultCard(
-                                item = item,
-                                isFavorite = state.favorites.any { it.id == item.id },
-                                strings = strings,
-                                onClick = { onOpenDetails(item) },
-                                onToggleFavorite = { onToggleFavorite(item) },
-                            )
+                        item(key = "search_type_filters") {
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                val options = listOf(
+                                    SearchMediaTypeFilter.ALL to strings.ui.filterAllTypes,
+                                    SearchMediaTypeFilter.MOVIE to strings.ui.filterMoviesOnly,
+                                    SearchMediaTypeFilter.TV to strings.ui.filterTvOnly,
+                                )
+                                items(options) { (option, label) ->
+                                    val count = when (option) {
+                                        SearchMediaTypeFilter.ALL -> state.searchResults.size
+                                        SearchMediaTypeFilter.MOVIE -> state.searchResults.count { it.mediaType == MediaType.MOVIE }
+                                        SearchMediaTypeFilter.TV -> state.searchResults.count { it.mediaType == MediaType.TV }
+                                    }
+                                    FilterChip(
+                                        selected = typeFilter == option,
+                                        onClick = { typeFilter = option },
+                                        label = { Text("$label ($count)") },
+                                        modifier = Modifier
+                                            .heightIn(min = 40.dp)
+                                            .testTag("filter_type_${option.name.lowercase()}"),
+                                    )
+                                }
+                            }
+                        }
+
+                        if (filteredSearchResults.isEmpty()) {
+                            item(key = "filtered_empty") {
+                                Text(
+                                    text = strings.discover.searchNoResultsTitle,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(vertical = 12.dp),
+                                )
+                            }
+                        } else {
+                            items(filteredSearchResults, key = { it.id }) { item ->
+                                MediaResultCard(
+                                    item = item,
+                                    isFavorite = state.favorites.any { it.id == item.id },
+                                    strings = strings,
+                                    onClick = { onOpenDetails(item) },
+                                    onToggleFavorite = { onToggleFavorite(item) },
+                                )
+                            }
                         }
                     }
                 }
@@ -688,6 +744,7 @@ fun PosterImage(
     contentDescription: String,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     Box(
         modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
@@ -699,8 +756,15 @@ fun PosterImage(
             modifier = Modifier.size(32.dp),
         )
         if (!posterUrl.isNullOrBlank()) {
+            val imageRequest = remember(posterUrl, context) {
+                ImageRequest.Builder(context)
+                    .data(posterUrl)
+                    .size(300, 450)
+                    .crossfade(true)
+                    .build()
+            }
             AsyncImage(
-                model = posterUrl,
+                model = imageRequest,
                 contentDescription = contentDescription,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

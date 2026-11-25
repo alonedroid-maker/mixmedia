@@ -26,10 +26,10 @@ import org.junit.Test
 class VideoLinkExtractorTest {
 
     @Test
-    fun `default viewmodel state starts in English on resolver tab`() {
+    fun `default viewmodel state starts in English on home tab`() {
         val vm = LinkExtractorViewModel()
         assertEquals(AppLanguage.EN, vm.screenState.value.language)
-        assertEquals(AppDestination.RESOLVER, vm.screenState.value.destination)
+        assertEquals(AppDestination.HOME, vm.screenState.value.destination)
         assertFalse(vm.screenState.value.isVlcInterceptorEnabled)
         assertFalse(vm.screenState.value.isDeveloperMode)
     }
@@ -104,9 +104,11 @@ class VideoLinkExtractorTest {
     }
 
     @Test
-    fun `normal mode strings do not mention curl in either English or Persian`() {
+    fun `normal mode strings use MediaX branding and do not mention curl in either language`() {
         for (lang in AppLanguage.entries) {
             val s = stringsFor(lang)
+            assertEquals("MediaX", s.appName)
+            assertTrue(s.ui.navHome.isNotBlank())
             val normalTexts = listOf(
                 s.appName,
                 s.appSubtitle,
@@ -185,6 +187,19 @@ class VideoLinkExtractorTest {
             status = DownloadStatus.COMPLETED,
         )
 
+        val paused = DownloadTask(
+            id = "4",
+            url = "http://example.com/d.mkv",
+            fileName = "d.mkv",
+            status = DownloadStatus.PAUSED,
+        )
+        val failed = DownloadTask(
+            id = "5",
+            url = "http://example.com/e.mkv",
+            fileName = "e.mkv",
+            status = DownloadStatus.FAILED,
+        )
+
         assertEquals(25, active.progressPercent)
         assertEquals("2.0 MB/s", active.formattedSpeed())
         assertEquals("1m 35s", active.formattedEta())
@@ -193,11 +208,13 @@ class VideoLinkExtractorTest {
         assertEquals(QueueConcurrency.TWO, QueueConcurrency.fromCode("invalid"))
         assertEquals(QueueConcurrency.ALL, QueueConcurrency.fromCode("all"))
 
-        val allTasks = listOf(active, queued, completed)
-        assertEquals(3, filterDownloadTasks(allTasks, DownloadFilter.ALL).size)
+        val allTasks = listOf(active, queued, completed, paused, failed)
+        assertEquals(5, filterDownloadTasks(allTasks, DownloadFilter.ALL).size)
         assertEquals(listOf(active), filterDownloadTasks(allTasks, DownloadFilter.ACTIVE))
         assertEquals(listOf(queued), filterDownloadTasks(allTasks, DownloadFilter.QUEUED))
+        assertEquals(listOf(paused), filterDownloadTasks(allTasks, DownloadFilter.PAUSED))
         assertEquals(listOf(completed), filterDownloadTasks(allTasks, DownloadFilter.COMPLETED))
+        assertEquals(listOf(failed), filterDownloadTasks(allTasks, DownloadFilter.FAILED))
     }
 
     @Test

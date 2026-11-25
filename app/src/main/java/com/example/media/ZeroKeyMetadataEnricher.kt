@@ -609,7 +609,7 @@ internal class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
         (0 until length()).mapNotNull { optString(it).takeIf { s -> s.isNotBlank() } }
 
     companion object {
-        private const val USER_AGENT = "MIxmediaAndroid/1.1 (https://github.com/alonedroid-maker/mixmedia)"
+        private const val USER_AGENT = "MediaXAndroid/1.1 (https://github.com/alonedroid-maker/mixmedia)"
     }
 }
 

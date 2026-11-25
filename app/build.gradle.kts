@@ -1,4 +1,7 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.io.InputStreamReader
+import java.util.Properties
+import org.gradle.api.GradleException
 
 plugins {
   alias(libs.plugins.android.application)
@@ -8,6 +11,26 @@ plugins {
   alias(libs.plugins.google.services)
 }
 
+val releaseInfoFile = rootProject.file("release-info.properties")
+if (!releaseInfoFile.exists()) {
+  throw GradleException("Missing release-info.properties at project root: ${releaseInfoFile.absolutePath}")
+}
+val releaseProps = Properties().apply {
+  releaseInfoFile.inputStream().use { stream ->
+    load(InputStreamReader(stream, Charsets.UTF_8))
+  }
+}
+val releaseVersionName = releaseProps.getProperty("VERSION_NAME")?.trim().orEmpty()
+if (releaseVersionName.isEmpty()) {
+  throw GradleException("VERSION_NAME in release-info.properties must not be empty.")
+}
+val releaseVersionCodeRaw = releaseProps.getProperty("VERSION_CODE")?.trim().orEmpty()
+val releaseVersionCode =
+  releaseVersionCodeRaw.toIntOrNull()?.takeIf { it > 0 }
+    ?: throw GradleException(
+      "VERSION_CODE in release-info.properties must be a positive integer, found '$releaseVersionCodeRaw'."
+    )
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -16,8 +39,8 @@ android {
     applicationId = "com.aistudio.mixmedia.vpxkqm"
     minSdk = 24
     targetSdk = 36
-    versionCode = 2
-    versionName = "1.1"
+    versionCode = releaseVersionCode
+    versionName = releaseVersionName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

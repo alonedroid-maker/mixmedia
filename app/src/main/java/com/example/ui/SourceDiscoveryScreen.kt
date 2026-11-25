@@ -497,9 +497,10 @@ private fun SourceResultCard(
                 )
             }
 
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            val honestBadges = remember(item) { parseHonestSourceBadges(item) }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Surface(
                     shape = RoundedCornerShape(6.dp),
@@ -511,15 +512,45 @@ private fun SourceResultCard(
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                     )
                 }
-                if (item.detectedExtension != null) {
+
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (item.isDirectDownloadCandidate) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    },
+                ) {
+                    Text(
+                        text = if (item.isDirectDownloadCandidate) {
+                            strings.ui.sourceBadgeDirectFile
+                        } else {
+                            strings.ui.sourceBadgeWebPage
+                        },
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = if (item.isDirectDownloadCandidate) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    )
+                }
+
+                honestBadges.forEach { badge ->
+                    val (bg, fg) = when (badge.category) {
+                        SourceMetaCategory.QUALITY -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
+                        SourceMetaCategory.FORMAT -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
+                        SourceMetaCategory.AUDIO_SUB -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+                    }
                     Surface(
                         shape = RoundedCornerShape(6.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer,
+                        color = bg,
                     ) {
                         Text(
-                            text = item.detectedExtension,
+                            text = badge.label,
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            color = fg,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                         )
                     }
@@ -596,4 +627,49 @@ private fun SourceResultCard(
             }
         }
     }
+}
+
+enum class SourceMetaCategory {
+    QUALITY,
+    FORMAT,
+    AUDIO_SUB,
+}
+
+data class SourceMetaBadge(
+    val label: String,
+    val category: SourceMetaCategory,
+)
+
+fun parseHonestSourceBadges(item: WebSourceResult): List<SourceMetaBadge> {
+    val combined = listOf(item.title, item.snippet, item.url).joinToString(" ")
+    val lower = combined.lowercase()
+    val badges = mutableListOf<SourceMetaBadge>()
+
+    // Only emit badges for markers explicitly present in the genuine text/URL
+    when {
+        Regex("""\b(2160p|4k|uhd)\b""").containsMatchIn(lower) -> badges.add(SourceMetaBadge("4K / 2160p", SourceMetaCategory.QUALITY))
+        Regex("""\b1080p\b""").containsMatchIn(lower) -> badges.add(SourceMetaBadge("1080p", SourceMetaCategory.QUALITY))
+        Regex("""\b720p\b""").containsMatchIn(lower) -> badges.add(SourceMetaBadge("720p", SourceMetaCategory.QUALITY))
+        Regex("""\b480p\b""").containsMatchIn(lower) -> badges.add(SourceMetaBadge("480p", SourceMetaCategory.QUALITY))
+    }
+
+    val ext = item.detectedExtension?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
+    if (ext != null) {
+        badges.add(SourceMetaBadge(ext, SourceMetaCategory.FORMAT))
+    } else {
+        when {
+            Regex("""\bmkv\b""").containsMatchIn(lower) -> badges.add(SourceMetaBadge("MKV", SourceMetaCategory.FORMAT))
+            Regex("""\bmp4\b""").containsMatchIn(lower) -> badges.add(SourceMetaBadge("MP4", SourceMetaCategory.FORMAT))
+            Regex("""\bm3u8\b""").containsMatchIn(lower) -> badges.add(SourceMetaBadge("HLS", SourceMetaCategory.FORMAT))
+        }
+    }
+
+    if (lower.contains("دوبله") || Regex("""\bdubbed\b|\bpersian dub\b""").containsMatchIn(lower)) {
+        badges.add(SourceMetaBadge("دوبله فارسی / Dub", SourceMetaCategory.AUDIO_SUB))
+    }
+    if (lower.contains("زیرنویس") || Regex("""\bsoftsub\b|\bhardsub\b|\bpersian sub\b""").containsMatchIn(lower)) {
+        badges.add(SourceMetaBadge("زیرنویس / Sub", SourceMetaCategory.AUDIO_SUB))
+    }
+
+    return badges.distinctBy { it.label }
 }

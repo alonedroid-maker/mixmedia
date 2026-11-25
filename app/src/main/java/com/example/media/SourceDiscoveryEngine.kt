@@ -178,7 +178,7 @@ class SourceDiscoveryEngine(
                         url = finalUrl,
                         domain = finalDomain,
                         siteName = site.name,
-                        snippet = "Site requires interactive browser verification. Tap to open inside MIxmedia Browser.",
+                        snippet = "Site requires interactive browser verification. Tap to open inside MediaX Browser.",
                         status = SourceLinkStatus.WEBSITE_PAGE,
                         statusNote = "HTTP ${resp.code} (Browser required)",
                     )

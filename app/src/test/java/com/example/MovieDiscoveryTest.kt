@@ -17,7 +17,10 @@ import com.example.media.SourceDiscoveryEngine
 import com.example.media.SourceSearchTarget
 import com.example.media.SourceSiteConfig
 import com.example.media.SourceSitesCatalog
+import com.example.media.WebSourceResult
 import com.example.media.ZeroKeyMetadataEnricher
+import com.example.ui.SourceMetaCategory
+import com.example.ui.parseHonestSourceBadges
 import java.io.ByteArrayInputStream
 import java.io.File
 import kotlinx.coroutines.runBlocking
@@ -268,6 +271,34 @@ class MovieDiscoveryTest {
         assertFalse("User toggle off should be preserved across catalog updates", mergedSerialBlog.enabled)
         assertTrue("New built-in myf2ms should appear on upgrade", merged.any { it.id == "myf2ms" })
         assertTrue("User custom site should be preserved", merged.any { it.id == "custom_1" && it.isCustom })
+    }
+
+    @Test
+    fun `honest source badge parser extracts only genuinely present markers`() {
+        val richSource = WebSourceResult(
+            id = "rich-1",
+            title = "دانلود فیلم Interstellar 2014 دوبله فارسی 1080p",
+            url = "https://dl.example.com/Interstellar.2014.1080p.Dubbed.mkv",
+            domain = "dl.example.com",
+            siteName = "ExampleSite",
+            snippet = "نسخه MKV با کیفیت عالی و زیرنویس فارسی",
+            detectedExtension = "mkv",
+        )
+        val badges = parseHonestSourceBadges(richSource)
+        assertTrue(badges.any { it.label == "1080p" && it.category == SourceMetaCategory.QUALITY })
+        assertTrue(badges.any { it.label == "MKV" && it.category == SourceMetaCategory.FORMAT })
+        assertTrue(badges.any { it.category == SourceMetaCategory.AUDIO_SUB })
+
+        val plainSource = WebSourceResult(
+            id = "plain-1",
+            title = "Inception Movie Page",
+            url = "https://example.org/movies/inception",
+            domain = "example.org",
+            siteName = "ExampleSite",
+            snippet = "Read synopsis and user reviews",
+        )
+        val plainBadges = parseHonestSourceBadges(plainSource)
+        assertTrue("No quality/format tags should be fabricated", plainBadges.isEmpty())
     }
 
     @Test

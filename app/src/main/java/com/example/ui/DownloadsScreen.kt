@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -101,6 +102,7 @@ fun DownloadsScreen(
     onDeleteTask: (String) -> Unit,
     onCopyTaskUrl: (String) -> Unit,
     onOpenTaskFile: (DownloadTask) -> Unit,
+    onShareTaskFile: (DownloadTask) -> Unit = {},
     onPauseAll: () -> Unit,
     onResumeAll: () -> Unit,
     onClearCompleted: () -> Unit,
@@ -239,19 +241,34 @@ fun DownloadsScreen(
                         }
                     }
 
+                    val filterCounts = remember(tasks) {
+                        mapOf(
+                            DownloadFilter.ALL to tasks.size,
+                            DownloadFilter.ACTIVE to tasks.count { it.isActive },
+                            DownloadFilter.QUEUED to tasks.count { it.status == DownloadStatus.QUEUED },
+                            DownloadFilter.PAUSED to tasks.count { it.status == DownloadStatus.PAUSED },
+                            DownloadFilter.COMPLETED to tasks.count { it.status == DownloadStatus.COMPLETED },
+                            DownloadFilter.FAILED to tasks.count { it.status == DownloadStatus.FAILED },
+                        )
+                    }
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         val chips = listOf(
                             DownloadFilter.ALL to strings.filterAll,
                             DownloadFilter.ACTIVE to strings.filterActive,
                             DownloadFilter.QUEUED to strings.filterQueued,
+                            DownloadFilter.PAUSED to strings.ui.filterPaused,
                             DownloadFilter.COMPLETED to strings.filterCompleted,
+                            DownloadFilter.FAILED to strings.ui.filterFailed,
                         )
                         items(chips) { (filterType, label) ->
+                            val count = filterCounts[filterType] ?: 0
                             FilterChip(
                                 selected = filter == filterType,
                                 onClick = { onFilterSelected(filterType) },
-                                label = { Text(label) },
-                                modifier = Modifier.heightIn(min = 40.dp),
+                                label = { Text("$label ($count)") },
+                                modifier = Modifier
+                                    .heightIn(min = 40.dp)
+                                    .testTag("download_filter_${filterType.name.lowercase()}"),
                             )
                         }
                     }
@@ -306,6 +323,7 @@ fun DownloadsScreen(
                         onDelete = { onDeleteTask(task.id) },
                         onCopyUrl = { onCopyTaskUrl(task.url) },
                         onOpen = { onOpenTaskFile(task) },
+                        onShare = { onShareTaskFile(task) },
                     )
                 }
             }
@@ -610,6 +628,7 @@ private fun DownloadTaskCard(
     onDelete: () -> Unit,
     onCopyUrl: () -> Unit,
     onOpen: () -> Unit,
+    onShare: () -> Unit,
 ) {
     val (statusLabel, statusBg, statusFg) = when (task.status) {
         DownloadStatus.QUEUED -> Triple(
@@ -937,7 +956,19 @@ private fun DownloadTaskCard(
                         ) {
                             Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(strings.actionPlayOpen)
+                            Text(strings.actionPlayOpen, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        IconButton(
+                            onClick = onShare,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("share_task_${task.id}"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Share,
+                                contentDescription = strings.ui.actionShareFile,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
                         }
                     }
                 }

@@ -14,7 +14,9 @@ import com.example.intent.VlcIntentHelper
 import com.example.network.InstagramExtractor
 import com.example.network.MediaFormatCategory
 import com.example.network.YouTubeExtractor
+import com.example.ui.theme.ThemeMode
 import java.io.File
+import java.util.Properties
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,11 +31,29 @@ import org.robolectric.annotation.Config
 class ExampleRobolectricTest {
 
     @Test
-    fun `read app name and unique package id from context`() {
+    fun `read app name unique package id and centralized release version from context`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
-        assertEquals("MIxmedia", appName)
+        assertEquals("MediaX", appName)
         assertEquals("com.aistudio.mixmedia.vpxkqm", context.packageName)
+
+        // Verify BuildConfig version fields match root release-info.properties when accessible
+        assertEquals(BuildConfig.VERSION_NAME, context.packageManager.getPackageInfo(context.packageName, 0).versionName)
+        assertTrue(BuildConfig.VERSION_CODE >= 2)
+        val releaseFile = listOf(
+            File("release-info.properties"),
+            File("../release-info.properties"),
+        ).firstOrNull { it.isFile }
+        if (releaseFile != null) {
+            val props = Properties().apply { releaseFile.inputStream().use(::load) }
+            assertEquals(props.getProperty("VERSION_NAME")?.trim(), BuildConfig.VERSION_NAME)
+            assertEquals(props.getProperty("VERSION_CODE")?.trim()?.toInt(), BuildConfig.VERSION_CODE)
+        }
+
+        assertEquals(ThemeMode.SYSTEM, ThemeMode.fromCode(null))
+        assertEquals(ThemeMode.DARK, ThemeMode.fromCode("dark"))
+        assertEquals(ThemeMode.LIGHT, ThemeMode.fromCode("LIGHT"))
+        assertEquals(ThemeMode.SYSTEM, ThemeMode.fromCode("unknown"))
     }
 
     @Test
@@ -147,14 +167,14 @@ class ExampleRobolectricTest {
         assertEquals(1, engine.connectionsPerDownload.value)
         engine.setConnectionsPerDownload(8)
 
-        val customUri = Uri.parse("content://com.android.externalstorage.documents/tree/primary%3AMovies%2FMIxmedia")
+        val customUri = Uri.parse("content://com.android.externalstorage.documents/tree/primary%3AMovies%2FMediaX")
         engine.setCustomSaveLocation(customUri)
         assertTrue(engine.saveLocation.value.isCustom)
         assertEquals(customUri.toString(), engine.saveLocation.value.treeUriString)
 
         engine.resetSaveLocationToDefault()
         assertFalse(engine.saveLocation.value.isCustom)
-        assertEquals("Downloads/MIxmedia", engine.saveLocation.value.displayPath)
+        assertEquals("Downloads/MediaX", engine.saveLocation.value.displayPath)
 
         val first = engine.enqueue(
             url = "http://127.0.0.1:1/video1.mkv?expire=111",

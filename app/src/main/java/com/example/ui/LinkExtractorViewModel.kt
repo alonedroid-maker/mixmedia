@@ -15,6 +15,7 @@ import com.example.network.UnsupportedPlatformException
 import com.example.network.VideoLinkExtractor
 import com.example.network.YouTubeStreamOption
 import com.example.security.DeveloperAccessVerifier
+import com.example.ui.theme.ThemeMode
 import java.io.IOException
 import java.net.UnknownHostException
 import kotlin.coroutines.cancellation.CancellationException
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 enum class AppDestination {
+    HOME,
     DISCOVER,
     RESOLVER,
     DOWNLOADS,
@@ -36,7 +38,9 @@ enum class DownloadFilter {
     ALL,
     ACTIVE,
     QUEUED,
+    PAUSED,
     COMPLETED,
+    FAILED,
 }
 
 sealed interface ExtractorUiState {
@@ -72,7 +76,8 @@ sealed interface UpdateCheckState {
 
 data class LinkExtractorScreenState(
     val language: AppLanguage = AppLanguage.EN,
-    val destination: AppDestination = AppDestination.RESOLVER,
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val destination: AppDestination = AppDestination.HOME,
     val downloadFilter: DownloadFilter = DownloadFilter.ALL,
     val inputText: String = "",
     val uiState: ExtractorUiState = ExtractorUiState.Idle,
@@ -103,10 +108,12 @@ class LinkExtractorViewModel(
         vlcEnabled: Boolean,
         vlcInstalled: Boolean,
         developerMode: Boolean,
+        themeMode: ThemeMode = ThemeMode.SYSTEM,
     ) {
         _screenState.update {
             it.copy(
                 language = language,
+                themeMode = themeMode,
                 isVlcInterceptorEnabled = vlcEnabled,
                 isVlcInstalled = vlcInstalled,
                 isDeveloperMode = developerMode,
@@ -145,6 +152,10 @@ class LinkExtractorViewModel(
 
     fun setLanguage(language: AppLanguage) {
         _screenState.update { it.copy(language = language) }
+    }
+
+    fun setThemeMode(themeMode: ThemeMode) {
+        _screenState.update { it.copy(themeMode = themeMode) }
     }
 
     fun navigateTo(destination: AppDestination) {
@@ -451,8 +462,10 @@ class LinkExtractorViewModel(
 fun filterDownloadTasks(tasks: List<DownloadTask>, filter: DownloadFilter): List<DownloadTask> {
     return when (filter) {
         DownloadFilter.ALL -> tasks
-        DownloadFilter.ACTIVE -> tasks.filter { it.isActive || it.status == DownloadStatus.PAUSED || it.status == DownloadStatus.FAILED }
+        DownloadFilter.ACTIVE -> tasks.filter { it.isActive }
         DownloadFilter.QUEUED -> tasks.filter { it.status == DownloadStatus.QUEUED }
+        DownloadFilter.PAUSED -> tasks.filter { it.status == DownloadStatus.PAUSED }
         DownloadFilter.COMPLETED -> tasks.filter { it.status == DownloadStatus.COMPLETED }
+        DownloadFilter.FAILED -> tasks.filter { it.status == DownloadStatus.FAILED }
     }
 }

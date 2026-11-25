@@ -2,6 +2,7 @@ package com.example.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,7 +21,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -32,7 +35,6 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Star
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -54,10 +56,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.media.DetailsUiState
 import com.example.media.MediaDetails
 import com.example.media.MediaSearchResult
@@ -95,140 +103,136 @@ fun MediaDetailsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item(key = "details_topbar") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(
-                        onClick = onBack,
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .testTag("details_back_button"),
-                    ) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = strings.discover.detailsBack)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(strings.discover.detailsBack)
-                    }
-
-                    Row {
-                        IconButton(
-                            onClick = { onToggleFavorite(activeSummary) },
-                            modifier = Modifier
-                                .minimumInteractiveComponentSize()
-                                .testTag("details_favorite_button"),
-                        ) {
-                            Icon(
-                                imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                                contentDescription = strings.discover.favoritesTitle,
-                                tint = if (isFavorite) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        IconButton(
-                            onClick = {
-                                val text = buildString {
-                                    append(activeSummary.title)
-                                    activeSummary.releaseYear?.let { append(" ($it)") }
-                                    details?.imdbUrl?.let { append("\n$it") }
-                                }
-                                onShareMedia(text)
-                            },
-                            modifier = Modifier.minimumInteractiveComponentSize(),
-                        ) {
-                            Icon(Icons.Rounded.Share, contentDescription = strings.discover.detailsShare)
-                        }
-                    }
-                }
-            }
-
             item(key = "details_hero") {
+                val context = LocalContext.current
+                val heroBackdropUrl = details?.backdropUrl ?: details?.posterUrl ?: summary.posterUrl
+                val rating = details?.imdbRating ?: summary.imdbRating
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large,
+                    shape = MaterialTheme.shapes.extraLarge,
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        PosterImage(
-                            posterUrl = details?.posterUrl ?: summary.posterUrl,
-                            mediaType = summary.mediaType,
-                            contentDescription = summary.title,
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Box(
                             modifier = Modifier
-                                .width(114.dp)
-                                .height(170.dp)
-                                .clip(RoundedCornerShape(12.dp)),
-                        )
-
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                                .fillMaxWidth()
+                                .height(200.dp)
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
                         ) {
-                            Text(
-                                text = details?.title ?: summary.title,
-                                style = MaterialTheme.typography.titleLarge,
+                            if (!heroBackdropUrl.isNullOrBlank()) {
+                                val backdropRequest = remember(heroBackdropUrl, context) {
+                                    ImageRequest.Builder(context)
+                                        .data(heroBackdropUrl)
+                                        .size(780, 440)
+                                        .crossfade(true)
+                                        .build()
+                                }
+                                AsyncImage(
+                                    model = backdropRequest,
+                                    contentDescription = activeSummary.title,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.Black.copy(alpha = 0.45f),
+                                                Color.Transparent,
+                                                MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                                            )
+                                        )
+                                    ),
                             )
 
-                            val faTitle = details?.persianTitle ?: summary.persianTitle
-                            if (!faTitle.isNullOrBlank() && !faTitle.equals(details?.title ?: summary.title, ignoreCase = true)) {
-                                Text(
-                                    text = faTitle,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-
-                            val orig = details?.originalTitle ?: summary.originalTitle
-                            if (!orig.isNullOrBlank() && !orig.equals(details?.title ?: summary.title, ignoreCase = true)) {
-                                Text(
-                                    text = orig,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
                                 ) {
-                                    Text(
-                                        text = if (summary.mediaType == MediaType.TV) strings.discover.badgeTvShow else strings.discover.badgeMovie,
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                    )
+                                    IconButton(
+                                        onClick = onBack,
+                                        modifier = Modifier
+                                            .minimumInteractiveComponentSize()
+                                            .testTag("details_back_button"),
+                                    ) {
+                                        Icon(
+                                            Icons.AutoMirrored.Rounded.ArrowBack,
+                                            contentDescription = strings.discover.detailsBack,
+                                            tint = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
                                 }
 
-                                val yearText = buildYearRangeText(details, summary)
-                                if (yearText.isNotEmpty()) {
-                                    Text(
-                                        text = yearText,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                                    ) {
+                                        IconButton(
+                                            onClick = { onToggleFavorite(activeSummary) },
+                                            modifier = Modifier
+                                                .minimumInteractiveComponentSize()
+                                                .testTag("details_favorite_button"),
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                                contentDescription = strings.discover.favoritesTitle,
+                                                tint = if (isFavorite) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                                            )
+                                        }
+                                    }
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                                    ) {
+                                        IconButton(
+                                            onClick = {
+                                                val text = buildString {
+                                                    append(activeSummary.title)
+                                                    activeSummary.releaseYear?.let { append(" ($it)") }
+                                                    details?.imdbUrl?.let { append("\n$it") }
+                                                }
+                                                onShareMedia(text)
+                                            },
+                                            modifier = Modifier.minimumInteractiveComponentSize(),
+                                        ) {
+                                            Icon(
+                                                Icons.Rounded.Share,
+                                                contentDescription = strings.discover.detailsShare,
+                                                tint = MaterialTheme.colorScheme.onSurface,
+                                            )
+                                        }
+                                    }
                                 }
+                            }
 
-                                val runtime = details?.runtimeMinutes ?: details?.episodeRuntimeMinutes ?: summary.runtimeMinutes
-                                if (runtime != null) {
-                                    Text(
-                                        text = "• ${strings.discover.labelRuntimeMinutes(runtime)}",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-
-                                val rating = details?.imdbRating ?: summary.imdbRating
-                                if (rating != null) {
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            if (rating != null) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.6f)),
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(12.dp),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    ) {
                                         Icon(
                                             Icons.Rounded.Star,
                                             contentDescription = null,
@@ -237,32 +241,112 @@ fun MediaDetailsScreen(
                                         )
                                         Text(
                                             text = String.format(java.util.Locale.US, "%.1f", rating),
-                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                                             color = MaterialTheme.colorScheme.tertiary,
                                         )
                                     }
                                 }
                             }
+                        }
 
-                            val genres = details?.genres?.takeIf { it.isNotEmpty() } ?: summary.genres
-                            if (genres.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        ) {
+                            PosterImage(
+                                posterUrl = details?.posterUrl ?: summary.posterUrl,
+                                mediaType = summary.mediaType,
+                                contentDescription = summary.title,
+                                modifier = Modifier
+                                    .width(108.dp)
+                                    .height(160.dp)
+                                    .clip(RoundedCornerShape(12.dp)),
+                            )
+
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
                                 Text(
-                                    text = genres.joinToString(" • "),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    text = details?.title ?: summary.title,
+                                    style = MaterialTheme.typography.titleLarge,
                                 )
-                            }
 
-                            if (details?.totalSeasons != null || details?.totalEpisodes != null) {
-                                val parts = buildList {
-                                    details.totalSeasons?.let { add(strings.discover.labelSeasonsCount(it)) }
-                                    details.totalEpisodes?.let { add(strings.discover.labelEpisodesCount(it)) }
+                                val faTitle = details?.persianTitle ?: summary.persianTitle
+                                if (!faTitle.isNullOrBlank() && !faTitle.equals(details?.title ?: summary.title, ignoreCase = true)) {
+                                    Text(
+                                        text = faTitle,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
                                 }
-                                Text(
-                                    text = parts.joinToString(" • "),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.secondary,
-                                )
+
+                                val orig = details?.originalTitle ?: summary.originalTitle
+                                if (!orig.isNullOrBlank() && !orig.equals(details?.title ?: summary.title, ignoreCase = true)) {
+                                    Text(
+                                        text = orig,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                    ) {
+                                        Text(
+                                            text = if (summary.mediaType == MediaType.TV) strings.discover.badgeTvShow else strings.discover.badgeMovie,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                        )
+                                    }
+
+                                    val yearText = buildYearRangeText(details, summary)
+                                    if (yearText.isNotEmpty()) {
+                                        Text(
+                                            text = yearText,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+
+                                    val runtime = details?.runtimeMinutes ?: details?.episodeRuntimeMinutes ?: summary.runtimeMinutes
+                                    if (runtime != null) {
+                                        Text(
+                                            text = "• ${strings.discover.labelRuntimeMinutes(runtime)}",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+
+                                val genres = details?.genres?.takeIf { it.isNotEmpty() } ?: summary.genres
+                                if (genres.isNotEmpty()) {
+                                    Text(
+                                        text = genres.joinToString(" • "),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+
+                                if (details?.totalSeasons != null || details?.totalEpisodes != null) {
+                                    val parts = buildList {
+                                        details.totalSeasons?.let { add(strings.discover.labelSeasonsCount(it)) }
+                                        details.totalEpisodes?.let { add(strings.discover.labelEpisodesCount(it)) }
+                                    }
+                                    Text(
+                                        text = parts.joinToString(" • "),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.secondary,
+                                    )
+                                }
                             }
                         }
                     }
@@ -420,25 +504,39 @@ fun MediaDetailsScreen(
                             ?: summary.topCast.map { com.example.media.CastMember(it) }
                         if (castList.isNotEmpty()) {
                             Text(strings.discover.labelCast, style = MaterialTheme.typography.titleSmall)
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth(),
                             ) {
-                                castList.take(12).forEach { member ->
-                                    AssistChip(
-                                        onClick = {},
-                                        label = {
+                                items(castList.take(15)) { member ->
+                                    Surface(
+                                        shape = MaterialTheme.shapes.medium,
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .widthIn(min = 104.dp, max = 160.dp)
+                                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                                        ) {
                                             Text(
-                                                text = if (!member.character.isNullOrBlank()) {
-                                                    "${member.name} (${member.character})"
-                                                } else {
-                                                    member.name
-                                                },
+                                                text = member.name,
+                                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
                                             )
-                                        },
-                                    )
+                                            if (!member.character.isNullOrBlank()) {
+                                                Text(
+                                                    text = member.character,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

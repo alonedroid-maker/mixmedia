@@ -13,6 +13,17 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 
+enum class ThemeMode(val code: String) {
+    SYSTEM("system"),
+    DARK("dark"),
+    LIGHT("light");
+
+    companion object {
+        fun fromCode(code: String?): ThemeMode =
+            entries.firstOrNull { it.code.equals(code, ignoreCase = true) } ?: SYSTEM
+    }
+}
+
 private val DarkColorScheme = darkColorScheme(
     primary = CyanPrimaryDark,
     onPrimary = OnCyanPrimaryDark,
@@ -65,18 +76,25 @@ val AppShapes = Shapes(
 )
 
 @Composable
-fun LinkYabTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+fun MediaXTheme(
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val useDarkTheme = when (themeMode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.DARK -> true
+        ThemeMode.LIGHT -> false
+    }
+    val colorScheme = if (useDarkTheme) DarkColorScheme else LightColorScheme
 
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as? Activity)?.window
             if (window != null) {
-                WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+                val controller = WindowCompat.getInsetsController(window, view)
+                controller.isAppearanceLightStatusBars = !useDarkTheme
+                controller.isAppearanceLightNavigationBars = !useDarkTheme
             }
         }
     }
@@ -85,6 +103,17 @@ fun LinkYabTheme(
         colorScheme = colorScheme,
         typography = AppTypography,
         shapes = AppShapes,
+        content = content,
+    )
+}
+
+@Composable
+fun LinkYabTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    content: @Composable () -> Unit,
+) {
+    MediaXTheme(
+        themeMode = if (darkTheme) ThemeMode.DARK else ThemeMode.LIGHT,
         content = content,
     )
 }

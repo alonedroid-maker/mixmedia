@@ -41,6 +41,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Settings
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -115,6 +117,7 @@ import com.example.media.FuzzyTitleMatcher
 import com.example.media.MovieDiscoveryViewModel
 import com.example.network.CurlResolutionResult
 import com.example.ui.theme.JetBrainsMonoFamily
+import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.launch
 
 @Composable
@@ -123,6 +126,25 @@ fun FiXLinkApp(
     discoveryViewModel: MovieDiscoveryViewModel,
     downloadEngine: DownloadEngine,
     onLanguagePersisted: (AppLanguage) -> Unit,
+    onDeveloperModePersisted: (Boolean) -> Unit,
+) {
+    MediaXApp(
+        viewModel = viewModel,
+        discoveryViewModel = discoveryViewModel,
+        downloadEngine = downloadEngine,
+        onLanguagePersisted = onLanguagePersisted,
+        onThemeModePersisted = {},
+        onDeveloperModePersisted = onDeveloperModePersisted,
+    )
+}
+
+@Composable
+fun MediaXApp(
+    viewModel: LinkExtractorViewModel,
+    discoveryViewModel: MovieDiscoveryViewModel,
+    downloadEngine: DownloadEngine,
+    onLanguagePersisted: (AppLanguage) -> Unit,
+    onThemeModePersisted: (ThemeMode) -> Unit,
     onDeveloperModePersisted: (Boolean) -> Unit,
 ) {
     val state by viewModel.screenState.collectAsStateWithLifecycle()
@@ -272,6 +294,25 @@ fun FiXLinkApp(
         }
     }
 
+    fun shareDownloadedFile(task: DownloadTask) {
+        val uri = downloadEngine.getOpenableUri(task)
+        if (uri == null) {
+            showMessage(strings.ui.msgNoFileSharer)
+            return
+        }
+        try {
+            val mimeType = downloadEngine.getMimeTypeForTask(task.fileName)
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = mimeType
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, strings.ui.actionShareFile))
+        } catch (_: Exception) {
+            showMessage(strings.ui.msgNoFileSharer)
+        }
+    }
+
     fun openExternalUrl(url: String) {
         if (!FuzzyTitleMatcher.isSafeHttpUrl(url)) return
         try {
@@ -312,9 +353,9 @@ fun FiXLinkApp(
         BackHandler {
             discoveryViewModel.popRoute()
         }
-    } else if (state.destination != AppDestination.RESOLVER && !isInsideSubRoute) {
+    } else if (state.destination != AppDestination.HOME && !isInsideSubRoute) {
         BackHandler {
-            viewModel.navigateTo(AppDestination.RESOLVER)
+            viewModel.navigateTo(AppDestination.HOME)
         }
     }
 
@@ -335,6 +376,22 @@ fun FiXLinkApp(
                             windowInsets = WindowInsets.navigationBars,
                             containerColor = MaterialTheme.colorScheme.surface,
                         ) {
+                            NavigationBarItem(
+                                selected = state.destination == AppDestination.HOME,
+                                onClick = { viewModel.navigateTo(AppDestination.HOME) },
+                                icon = {
+                                    Icon(
+                                        imageVector = if (state.destination == AppDestination.HOME) {
+                                            Icons.Rounded.Home
+                                        } else {
+                                            Icons.Outlined.Home
+                                        },
+                                        contentDescription = strings.ui.navHome,
+                                    )
+                                },
+                                label = { Text(strings.ui.navHome, maxLines = 1) },
+                                modifier = Modifier.testTag("nav_home"),
+                            )
                             NavigationBarItem(
                                 selected = state.destination == AppDestination.DISCOVER,
                                 onClick = {
@@ -394,7 +451,7 @@ fun FiXLinkApp(
                                         )
                                     }
                                 },
-                                label = { Text(strings.navDownloads) },
+                                label = { Text(strings.navDownloads, maxLines = 1) },
                                 modifier = Modifier.testTag("nav_downloads"),
                             )
                             NavigationBarItem(
@@ -416,7 +473,7 @@ fun FiXLinkApp(
                                         contentDescription = strings.navSettings,
                                     )
                                 },
-                                label = { Text(strings.navSettings) },
+                                label = { Text(strings.navSettings, maxLines = 1) },
                                 modifier = Modifier.testTag("nav_settings"),
                             )
                         }
@@ -434,6 +491,12 @@ fun FiXLinkApp(
                             containerColor = MaterialTheme.colorScheme.surface,
                         ) {
                             Spacer(modifier = Modifier.height(12.dp))
+                            NavigationRailItem(
+                                selected = state.destination == AppDestination.HOME,
+                                onClick = { viewModel.navigateTo(AppDestination.HOME) },
+                                icon = { Icon(Icons.Rounded.Home, contentDescription = strings.ui.navHome) },
+                                label = { Text(strings.ui.navHome) },
+                            )
                             NavigationRailItem(
                                 selected = state.destination == AppDestination.DISCOVER,
                                 onClick = {
@@ -484,6 +547,53 @@ fun FiXLinkApp(
                     }
 
                     when (state.destination) {
+                        AppDestination.HOME -> {
+                            MediaXDashboardScreen(
+                                extractorState = state,
+                                discoveryState = discoveryState,
+                                downloadTasks = downloadTasks,
+                                strings = strings,
+                                onQuickMovieSearch = { query ->
+                                    discoveryViewModel.resetToHome()
+                                    discoveryViewModel.onSearchQueryChanged(query, triggerImmediately = true)
+                                    viewModel.navigateTo(AppDestination.DISCOVER)
+                                },
+                                onOpenDiscover = {
+                                    discoveryViewModel.resetToHome()
+                                    viewModel.navigateTo(AppDestination.DISCOVER)
+                                },
+                                onOpenResolver = { viewModel.navigateTo(AppDestination.RESOLVER) },
+                                onOpenDownloads = { viewModel.navigateTo(AppDestination.DOWNLOADS) },
+                                onOpenInAppBrowser = { url, title ->
+                                    discoveryViewModel.resetToHome()
+                                    discoveryViewModel.openInternalBrowser(url, title)
+                                    viewModel.navigateTo(AppDestination.DISCOVER)
+                                },
+                                onOpenQuickSite = { site ->
+                                    if (discoveryState.preferences.preferInternalBrowser) {
+                                        discoveryViewModel.resetToHome()
+                                        discoveryViewModel.openInternalBrowser(site.baseUrl, site.name)
+                                        viewModel.navigateTo(AppDestination.DISCOVER)
+                                    } else {
+                                        openExternalUrl(site.baseUrl)
+                                    }
+                                },
+                                onOpenMediaDetails = { item ->
+                                    discoveryViewModel.resetToHome()
+                                    discoveryViewModel.openMediaDetails(item)
+                                    viewModel.navigateTo(AppDestination.DISCOVER)
+                                },
+                                onSelectRecentSearch = { query ->
+                                    discoveryViewModel.resetToHome()
+                                    discoveryViewModel.selectRecentSearch(query)
+                                    viewModel.navigateTo(AppDestination.DISCOVER)
+                                },
+                                onSelectResolvedHistory = { item ->
+                                    viewModel.onSelectHistoryItem(item)
+                                    viewModel.navigateTo(AppDestination.RESOLVER)
+                                },
+                            )
+                        }
                         AppDestination.DISCOVER -> {
                             when (val route = discoveryState.currentRoute) {
                                 is DiscoveryRoute.HomeSearch -> {
@@ -644,6 +754,7 @@ fun FiXLinkApp(
                                     showMessage(strings.msgTaskUrlCopied)
                                 },
                                 onOpenTaskFile = ::openDownloadedFile,
+                                onShareTaskFile = ::shareDownloadedFile,
                                 onPauseAll = downloadEngine::pauseAll,
                                 onResumeAll = {
                                     ensureNotificationPermissionIfNeeded()
@@ -665,6 +776,10 @@ fun FiXLinkApp(
                                 onSelectLanguage = { lang ->
                                     viewModel.setLanguage(lang)
                                     onLanguagePersisted(lang)
+                                },
+                                onSelectThemeMode = { mode ->
+                                    viewModel.setThemeMode(mode)
+                                    onThemeModePersisted(mode)
                                 },
                                 onConcurrencyChanged = downloadEngine::setConcurrencyLimit,
                                 onConnectionsChanged = downloadEngine::setConnectionsPerDownload,

@@ -227,19 +227,21 @@ class DownloadEngine(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         }.getOrNull()
         if (publicDownloads != null) {
-            val publicSubdir = File(publicDownloads, "MIxmedia")
+            val publicSubdir = File(publicDownloads, "MediaX")
+            val legacyPublicSubdir = File(publicDownloads, "MIxmedia")
             if (existsCaseInsensitiveInDir(publicSubdir, fileName) ||
+                existsCaseInsensitiveInDir(legacyPublicSubdir, fileName) ||
                 existsCaseInsensitiveInDir(publicDownloads, fileName)
             ) {
                 return true
             }
         }
 
-        val fallbackDir = File(
-            appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: appContext.filesDir,
-            "MIxmedia",
-        )
-        return existsCaseInsensitiveInDir(fallbackDir, fileName)
+        val baseExternal = appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: appContext.filesDir
+        val fallbackDir = File(baseExternal, "MediaX")
+        val legacyFallbackDir = File(baseExternal, "MIxmedia")
+        return existsCaseInsensitiveInDir(fallbackDir, fileName) ||
+            existsCaseInsensitiveInDir(legacyFallbackDir, fileName)
     }
 
     private fun queryMediaStoreForFileName(
@@ -1074,7 +1076,7 @@ class DownloadEngine(
             }
         }
 
-        // 2. Default MediaStore.Downloads/MIxmedia (API 29+)
+        // 2. Default MediaStore.Downloads/MediaX (API 29+)
         if (publicUriStr == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val resolver = appContext.contentResolver
             if (overwriteExisting) {
@@ -1083,7 +1085,7 @@ class DownloadEngine(
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, desiredName)
                 put(MediaStore.Downloads.MIME_TYPE, resolvedMime)
-                put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/MIxmedia")
+                put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/MediaX")
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
             val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
@@ -1106,11 +1108,11 @@ class DownloadEngine(
             }
         }
 
-        // 3. Fallback / API 24-28: app external Downloads/MIxmedia
+        // 3. Fallback / API 24-28: app external Downloads/MediaX
         if (publicUriStr == null) {
             val targetDir = File(
                 appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: appContext.filesDir,
-                "MIxmedia",
+                "MediaX",
             ).apply { mkdirs() }
             val destFile = if (overwriteExisting) {
                 File(targetDir, desiredName).apply { if (exists()) delete() }
@@ -1234,8 +1236,8 @@ class DownloadEngine(
         runCatching {
             val resolver = appContext.contentResolver
             val projection = arrayOf(MediaStore.Downloads._ID)
-            val selection = "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} LIKE ?"
-            val args = arrayOf(fileName, "%MIxmedia%")
+            val selection = "${MediaStore.Downloads.DISPLAY_NAME} = ? AND (${MediaStore.Downloads.RELATIVE_PATH} LIKE ? OR ${MediaStore.Downloads.RELATIVE_PATH} LIKE ?)"
+            val args = arrayOf(fileName, "%MediaX%", "%MIxmedia%")
             resolver.query(
                 MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                 projection,

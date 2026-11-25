@@ -2,10 +2,10 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Dark Slate & Electric Cyan / Emerald Terminal Palette
-val SlateBgDark = Color(0xFF0B1120)
-val SlateSurfaceDark = Color(0xFF131C31)
-val SlateSurfaceElevatedDark = Color(0xFF1B2640)
+// MediaX Dark Obsidian-Navy & Electric Cyan / Emerald Palette
+val SlateBgDark = Color(0xFF080D1A)
+val SlateSurfaceDark = Color(0xFF111827)
+val SlateSurfaceElevatedDark = Color(0xFF182235)
 val SlateBorderDark = Color(0xFF283655)
 
 val CyanPrimaryDark = Color(0xFF22D3EE)
@@ -26,10 +26,10 @@ val OnErrorContainerDark = Color(0xFFFECACA)
 val TextPrimaryDark = Color(0xFFF1F5F9)
 val TextSecondaryDark = Color(0xFF94A3B8)
 
-// Light Palette (clean crisp contrast)
-val LightBg = Color(0xFFF8FAFC)
+// MediaX Crisp Light Palette (high contrast daylight readability)
+val LightBg = Color(0xFFF6F8FC)
 val LightSurface = Color(0xFFFFFFFF)
-val LightSurfaceElevated = Color(0xFFF1F5F9)
+val LightSurfaceElevated = Color(0xFFEDF2F7)
 val LightBorder = Color(0xFFCBD5E1)
 
 val CyanPrimaryLight = Color(0xFF0891B2)

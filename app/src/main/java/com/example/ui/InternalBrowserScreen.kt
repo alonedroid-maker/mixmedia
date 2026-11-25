@@ -35,9 +35,11 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -154,6 +156,7 @@ fun InternalBrowserScreen(
                         Icon(Icons.Rounded.Close, contentDescription = strings.discover.detailsBack)
                     }
 
+                    val isHttps = currentUrl.startsWith("https://", ignoreCase = true)
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = pageTitle.ifBlank { currentUrl },
@@ -161,13 +164,24 @@ fun InternalBrowserScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        Text(
-                            text = currentUrl,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                imageVector = if (isHttps) Icons.Rounded.Lock else Icons.Rounded.WarningAmber,
+                                contentDescription = if (isHttps) "HTTPS" else "HTTP",
+                                tint = if (isHttps) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.size(12.dp),
+                            )
+                            Text(
+                                text = currentUrl,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
 
                     IconButton(

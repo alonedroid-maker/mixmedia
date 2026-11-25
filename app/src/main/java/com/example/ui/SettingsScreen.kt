@@ -28,6 +28,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Visibility
@@ -70,12 +71,14 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
 import com.example.download.DownloadSaveLocation
 import com.example.download.QueueConcurrency
 import com.example.media.MediaPreferences
 import com.example.media.MovieDiscoveryState
 import com.example.network.GitHubUpdateChecker
 import com.example.network.GitHubUpdateResult
+import com.example.ui.theme.ThemeMode
 
 @Composable
 fun SettingsScreen(
@@ -86,6 +89,7 @@ fun SettingsScreen(
     currentVersion: String,
     strings: AppStrings,
     onSelectLanguage: (AppLanguage) -> Unit,
+    onSelectThemeMode: (ThemeMode) -> Unit = {},
     onConcurrencyChanged: (QueueConcurrency) -> Unit,
     onConnectionsChanged: (Int) -> Unit,
     onPickSaveFolder: () -> Unit,
@@ -176,6 +180,66 @@ fun SettingsScreen(
                                     .testTag("lang_option_${lang.code}"),
                             ) {
                                 Text(text = lang.displayName)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 1B. Appearance (System / Dark / Light Theme Switcher)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.large,
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Palette,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Column {
+                            Text(
+                                text = strings.ui.sectionAppearance,
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                text = strings.ui.appearanceDesc,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        val themeOptions = listOf(
+                            ThemeMode.SYSTEM to strings.ui.themeSystem,
+                            ThemeMode.DARK to strings.ui.themeDark,
+                            ThemeMode.LIGHT to strings.ui.themeLight,
+                        )
+                        themeOptions.forEachIndexed { index, (mode, label) ->
+                            SegmentedButton(
+                                selected = state.themeMode == mode,
+                                onClick = { onSelectThemeMode(mode) },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = themeOptions.size,
+                                ),
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("theme_option_${mode.code}"),
+                            ) {
+                                Text(text = label, maxLines = 1)
                             }
                         }
                     }
@@ -526,7 +590,7 @@ private fun GitHubUpdateCard(
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
-                        text = strings.updatesCurrentVersion(currentVersion),
+                        text = strings.updatesCurrentVersion("$currentVersion (${BuildConfig.VERSION_CODE})"),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
