@@ -6,6 +6,7 @@ import java.net.Inet6Address
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -40,12 +41,16 @@ data class CurlResolutionResult(
     val mediaAuthor: String? = null,
     val mediaDurationSeconds: Long? = null,
     val customUserAgent: String? = null,
+    val xVideoVariants: List<XVideoVariant> = emptyList(),
+    val thumbnailUrl: String? = null,
 )
 
 class CurlRedirectResolver(
     private val client: OkHttpClient = defaultClient(),
     private val youtubeExtractor: YouTubeExtractor = YouTubeExtractor(),
     private val instagramExtractor: InstagramExtractor = InstagramExtractor(),
+    private val xTwitterExtractor: XTwitterExtractor = XTwitterExtractor(),
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
 
     private val fastProbeClient: OkHttpClient by lazy {
@@ -97,7 +102,7 @@ class CurlRedirectResolver(
         inputUrl: String,
         cookieHeader: String? = null,
         onLogUpdate: (traceSoFar: String, currentHop: Int) -> Unit = { _, _ -> },
-    ): CurlResolutionResult = withContext(Dispatchers.IO) {
+    ): CurlResolutionResult = withContext(ioDispatcher) {
         if (YouTubeExtractor.isYouTubeUrl(inputUrl)) {
             val yt = youtubeExtractor.extract(
                 inputUrl = inputUrl,
@@ -151,6 +156,36 @@ class CurlRedirectResolver(
                 hops = ig.hops,
                 verboseLog = ig.verboseLog,
                 customUserAgent = ig.userAgent,
+            )
+        }
+
+        if (XTwitterExtractor.isXTwitterHost(inputUrl)) {
+            val xRes = xTwitterExtractor.extract(
+                inputUrl = inputUrl,
+                onLogUpdate = onLogUpdate,
+            )
+            val best = xRes.variants.firstOrNull()
+            if (best == null) {
+                throw XExtractionException(
+                    error = xRes.error ?: XExtractionError.EXTRACTION_FAILED,
+                    verboseLog = xRes.verboseLog,
+                )
+            }
+            return@withContext CurlResolutionResult(
+                sourceUrl = xRes.canonicalUrl,
+                directVideoUrl = best.url,
+                candidateVideoUrls = xRes.variants.map { it.url },
+                filename = best.suggestedFileName,
+                extension = best.container,
+                fileSizeFormatted = best.fileSizeFormatted,
+                finalStatusCode = 200,
+                hops = xRes.hops,
+                verboseLog = xRes.verboseLog,
+                mediaTitle = xRes.postText?.take(120) ?: best.suggestedFileName,
+                mediaAuthor = xRes.authorHandle?.let { "@$it" } ?: xRes.authorName,
+                mediaDurationSeconds = xRes.durationSeconds,
+                xVideoVariants = xRes.variants,
+                thumbnailUrl = xRes.thumbnailUrl,
             )
         }
 

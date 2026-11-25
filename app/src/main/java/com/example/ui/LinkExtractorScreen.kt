@@ -232,7 +232,7 @@ fun MediaXApp(
         suggestedFileName: String?,
         fromResolver: Boolean,
         customUserAgent: String? = null,
-    ) {
+    ): DownloadTask? {
         val candidateName = downloadEngine.resolveCandidateFileName(url, suggestedFileName)
         if (downloadEngine.hasFileConflict(candidateName, url = url, sourcePlayUrl = sourcePlayUrl)) {
             pendingConflictRequest = PendingDownloadRequest(
@@ -243,9 +243,10 @@ fun MediaXApp(
                 folderDisplayName = saveLocation.displayPath,
                 customUserAgent = customUserAgent,
             )
+            return null
         } else {
             ensureNotificationPermissionIfNeeded()
-            downloadEngine.enqueue(
+            val enqueued = downloadEngine.enqueue(
                 url = url,
                 sourcePlayUrl = sourcePlayUrl,
                 suggestedFileName = candidateName,
@@ -253,6 +254,7 @@ fun MediaXApp(
                 customUserAgent = customUserAgent,
             )
             showQueuedFeedback(fromResolver)
+            return enqueued
         }
     }
 
@@ -553,10 +555,21 @@ fun MediaXApp(
                                 discoveryState = discoveryState,
                                 downloadTasks = downloadTasks,
                                 strings = strings,
-                                onQuickMovieSearch = { query ->
-                                    discoveryViewModel.resetToHome()
-                                    discoveryViewModel.onSearchQueryChanged(query, triggerImmediately = true)
-                                    viewModel.navigateTo(AppDestination.DISCOVER)
+                                onSmartHomeSubmit = { rawInput ->
+                                    when (val action = classifyHomeInput(rawInput)) {
+                                        is HomeInputAction.ResolveLink -> {
+                                            viewModel.submitLinkFromHome(action.normalizedInput)
+                                        }
+                                        is HomeInputAction.SearchMedia -> {
+                                            discoveryViewModel.resetToHome()
+                                            discoveryViewModel.onSearchQueryChanged(action.query, triggerImmediately = true)
+                                            viewModel.navigateTo(AppDestination.DISCOVER)
+                                        }
+                                        HomeInputAction.OpenDiscover -> {
+                                            discoveryViewModel.resetToHome()
+                                            viewModel.navigateTo(AppDestination.DISCOVER)
+                                        }
+                                    }
                                 },
                                 onOpenDiscover = {
                                     discoveryViewModel.resetToHome()
@@ -592,6 +605,7 @@ fun MediaXApp(
                                     viewModel.onSelectHistoryItem(item)
                                     viewModel.navigateTo(AppDestination.RESOLVER)
                                 },
+                                onShowMessage = ::showMessage,
                             )
                         }
                         AppDestination.DISCOVER -> {
@@ -722,6 +736,7 @@ fun MediaXApp(
                                 onDismissClipboardUrl = viewModel::dismissDetectedClipboardUrl,
                                 onDownloadInApp = ::startDownloadFromResolver,
                                 onOpenQualityPicker = viewModel::openYouTubeFormatPicker,
+                                onOpenXQualityPicker = viewModel::openXQualityPicker,
                             )
                         }
 
@@ -926,6 +941,23 @@ fun MediaXApp(
                     onDismiss = viewModel::dismissYouTubeFormatPicker,
                 )
             }
+
+            state.pendingXResult?.let { xResult ->
+                XQualityPickerDialog(
+                    result = xResult,
+                    strings = strings,
+                    onDownloadVariant = { variant ->
+                        val updated = viewModel.selectXVariantOption(variant)
+                        if (updated != null) {
+                            startDownloadFromResolver(updated)
+                        }
+                    },
+                    onSelectVariant = { variant ->
+                        viewModel.selectXVariantOption(variant)
+                    },
+                    onDismiss = viewModel::dismissXQualityPicker,
+                )
+            }
         }
     }
 }
@@ -945,6 +977,7 @@ private fun ResolverScreen(
     onDismissClipboardUrl: () -> Unit,
     onDownloadInApp: (CurlResolutionResult) -> Unit,
     onOpenQualityPicker: () -> Unit,
+    onOpenXQualityPicker: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -1273,6 +1306,11 @@ private fun ResolverScreen(
                                 } else {
                                     null
                                 },
+                                onOpenXQualityPicker = if (uiState.result.xVideoVariants.size > 1) {
+                                    onOpenXQualityPicker
+                                } else {
+                                    null
+                                },
                             )
 
                             if (state.isDeveloperMode) {
@@ -1302,6 +1340,10 @@ private fun ResolverScreen(
                         ErrorType.NO_VIDEO_FOUND -> strings.errorNoVideoFound
                         ErrorType.YOUTUBE_UNSUPPORTED -> strings.errorYouTubeUnsupported
                         ErrorType.INSTAGRAM_UNSUPPORTED -> strings.errorInstagramUnsupported
+                        ErrorType.X_INVALID_URL -> strings.xDownloader.errorInvalidUrl
+                        ErrorType.X_NO_VIDEO -> strings.xDownloader.errorNoVideo
+                        ErrorType.X_UNAVAILABLE -> strings.xDownloader.errorUnavailable
+                        ErrorType.X_EXTRACTION_FAILED -> strings.xDownloader.errorExtractionFailed
                         ErrorType.HOST_UNREACHABLE -> strings.errorHostUnreachable
                         ErrorType.NETWORK_GENERIC -> strings.errorNetworkGeneric
                         ErrorType.CANCELLED -> strings.errorCancelled

@@ -23,12 +23,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Clear
+import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.TravelExplore
@@ -38,6 +43,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -57,6 +63,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
@@ -83,7 +90,7 @@ fun MediaXDashboardScreen(
     discoveryState: MovieDiscoveryState,
     downloadTasks: List<DownloadTask>,
     strings: AppStrings,
-    onQuickMovieSearch: (String) -> Unit,
+    onSmartHomeSubmit: (String) -> Unit,
     onOpenDiscover: () -> Unit,
     onOpenResolver: () -> Unit,
     onOpenDownloads: () -> Unit,
@@ -92,11 +99,26 @@ fun MediaXDashboardScreen(
     onOpenMediaDetails: (MediaSearchResult) -> Unit,
     onSelectRecentSearch: (String) -> Unit,
     onSelectResolvedHistory: (CurlResolutionResult) -> Unit,
+    onShowMessage: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var quickQuery by remember { mutableStateOf("") }
     var showBrowserUrlDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
     val focusManager = LocalFocusManager.current
+    val detectedHomeAction = remember(quickQuery) { classifyHomeInput(quickQuery) }
+    val isLinkDetected = detectedHomeAction is HomeInputAction.ResolveLink
+
+    fun pasteIntoSmartBar() {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clipText = clipboard.primaryClip?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)?.coerceToText(context)?.toString()
+        if (!clipText.isNullOrBlank()) {
+            quickQuery = clipText.trim()
+        } else {
+            onShowMessage(strings.msgNoClipboard)
+        }
+    }
 
     val activeDownloads = remember(downloadTasks) { downloadTasks.filter { it.isActive } }
     val queuedCount = remember(downloadTasks) { downloadTasks.count { it.status == DownloadStatus.QUEUED } }
@@ -220,32 +242,70 @@ fun MediaXDashboardScreen(
                                     onValueChange = { quickQuery = it },
                                     placeholder = {
                                         Text(
-                                            text = strings.discover.movieSearchPlaceholder,
+                                            text = strings.ui.smartHomePlaceholder,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                             style = MaterialTheme.typography.bodySmall,
                                         )
                                     },
-                                    leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = if (isLinkDetected) Icons.Rounded.Link else Icons.Rounded.Search,
+                                            contentDescription = null,
+                                            tint = if (isLinkDetected) {
+                                                MaterialTheme.colorScheme.secondary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            },
+                                        )
+                                    },
+                                    trailingIcon = {
+                                        if (quickQuery.isEmpty()) {
+                                            IconButton(
+                                                onClick = ::pasteIntoSmartBar,
+                                                modifier = Modifier.testTag("dashboard_smart_paste_button"),
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.ContentPaste,
+                                                    contentDescription = strings.cdPasteInput,
+                                                )
+                                            }
+                                        } else {
+                                            IconButton(
+                                                onClick = { quickQuery = "" },
+                                                modifier = Modifier.testTag("dashboard_smart_clear_button"),
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Clear,
+                                                    contentDescription = strings.cdClearInput,
+                                                )
+                                            }
+                                        }
+                                    },
                                     singleLine = true,
                                     shape = MaterialTheme.shapes.medium,
                                     colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                        focusedBorderColor = if (isLinkDetected) {
+                                            MaterialTheme.colorScheme.secondary
+                                        } else {
+                                            MaterialTheme.colorScheme.primary
+                                        },
                                         unfocusedBorderColor = MaterialTheme.colorScheme.outline,
                                         focusedContainerColor = MaterialTheme.colorScheme.surface,
                                         unfocusedContainerColor = MaterialTheme.colorScheme.surface,
                                     ),
-                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                    keyboardOptions = KeyboardOptions(
+                                        imeAction = if (isLinkDetected) ImeAction.Go else ImeAction.Search,
+                                    ),
                                     keyboardActions = KeyboardActions(
                                         onSearch = {
                                             focusManager.clearFocus()
-                                            val clean = quickQuery.trim()
-                                            if (clean.length >= 2) {
-                                                onQuickMovieSearch(clean)
-                                            } else {
-                                                onOpenDiscover()
-                                            }
-                                        }
+                                            onSmartHomeSubmit(quickQuery)
+                                        },
+                                        onGo = {
+                                            focusManager.clearFocus()
+                                            onSmartHomeSubmit(quickQuery)
+                                        },
                                     ),
                                     modifier = Modifier
                                         .weight(1f)
@@ -255,21 +315,36 @@ fun MediaXDashboardScreen(
                                 Button(
                                     onClick = {
                                         focusManager.clearFocus()
-                                        val clean = quickQuery.trim()
-                                        if (clean.length >= 2) {
-                                            onQuickMovieSearch(clean)
-                                        } else {
-                                            onOpenDiscover()
-                                        }
+                                        onSmartHomeSubmit(quickQuery)
                                     },
                                     modifier = Modifier
                                         .heightIn(min = 52.dp)
                                         .testTag("dashboard_quick_search_button"),
                                     shape = MaterialTheme.shapes.medium,
                                 ) {
-                                    Icon(Icons.Rounded.Search, contentDescription = strings.discover.actionSearchMovies)
+                                    Icon(
+                                        imageVector = if (isLinkDetected) Icons.Rounded.PlayArrow else Icons.Rounded.Search,
+                                        contentDescription = strings.discover.actionSearchMovies,
+                                    )
                                 }
                             }
+
+                            val hintText = when (detectedHomeAction) {
+                                is HomeInputAction.ResolveLink -> strings.ui.smartHomeLinkDetected
+                                is HomeInputAction.SearchMedia -> strings.ui.smartHomeMediaDetected
+                                HomeInputAction.OpenDiscover -> strings.ui.smartHomeHelper
+                            }
+                            val hintColor = when (detectedHomeAction) {
+                                is HomeInputAction.ResolveLink -> MaterialTheme.colorScheme.secondary
+                                is HomeInputAction.SearchMedia -> MaterialTheme.colorScheme.primary
+                                HomeInputAction.OpenDiscover -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                            Text(
+                                text = hintText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = hintColor,
+                                modifier = Modifier.testTag("dashboard_smart_hint"),
+                            )
                         }
                     }
                 }

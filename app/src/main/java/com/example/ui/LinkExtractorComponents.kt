@@ -83,6 +83,7 @@ fun DirectLinkResultCard(
     onOpenLink: (String) -> Unit,
     onShareLink: (String) -> Unit,
     onOpenQualityPicker: (() -> Unit)? = null,
+    onOpenXQualityPicker: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val directUrl = result.directVideoUrl ?: return
@@ -193,6 +194,19 @@ fun DirectLinkResultCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    val postCaption = listOfNotNull(
+                        result.mediaAuthor?.takeIf { it.isNotBlank() },
+                        result.mediaTitle?.takeIf { it.isNotBlank() && it != result.filename },
+                    ).joinToString(" • ")
+                    if (postCaption.isNotEmpty()) {
+                        Text(
+                            text = postCaption,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
 
@@ -263,6 +277,26 @@ fun DirectLinkResultCard(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = strings.actionChangeQualityAudio,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+            } else if (result.xVideoVariants.size > 1 && onOpenXQualityPicker != null) {
+                FilledTonalButton(
+                    onClick = onOpenXQualityPicker,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("change_x_quality_button"),
+                    shape = MaterialTheme.shapes.medium,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Tune,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = strings.ui.actionChangeXQuality(result.xVideoVariants.size),
                         style = MaterialTheme.typography.labelLarge,
                     )
                 }

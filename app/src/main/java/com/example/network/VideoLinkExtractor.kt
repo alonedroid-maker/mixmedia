@@ -219,7 +219,7 @@ object VideoLinkExtractor {
     }
 
     private fun cleanTrailingPunctuation(url: String): String {
-        return url.trimEnd('\'', '"', ',', ';', '.', ')', ']')
+        return url.trimEnd('\'', '"', ',', ';', '.', '!', ')', ']')
     }
 
     private fun decodeSafely(value: String): String {

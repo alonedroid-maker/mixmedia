@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import com.example.download.DownloadEngine
 import com.example.download.DownloadStatus
 import com.example.download.DownloadTask
-import com.example.download.QueueConcurrency
 import com.example.network.CurlRedirectResolver
 import com.example.network.CurlResolutionResult
 import com.example.network.GitHubUpdateChecker
@@ -13,11 +12,16 @@ import com.example.network.GitHubUpdateResult
 import com.example.network.SocialPlatform
 import com.example.network.UnsupportedPlatformException
 import com.example.network.VideoLinkExtractor
+import com.example.network.XExtractionError
+import com.example.network.XExtractionException
+import com.example.network.XTwitterExtractor
+import com.example.network.XVideoVariant
 import com.example.network.YouTubeStreamOption
 import com.example.security.DeveloperAccessVerifier
 import com.example.ui.theme.ThemeMode
 import java.io.IOException
 import java.net.UnknownHostException
+import java.util.Locale
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +47,12 @@ enum class DownloadFilter {
     FAILED,
 }
 
+sealed interface HomeInputAction {
+    data object OpenDiscover : HomeInputAction
+    data class SearchMedia(val query: String) : HomeInputAction
+    data class ResolveLink(val normalizedInput: String) : HomeInputAction
+}
+
 sealed interface ExtractorUiState {
     data object Idle : ExtractorUiState
     data class Loading(
@@ -63,6 +73,10 @@ enum class ErrorType {
     NO_VIDEO_FOUND,
     YOUTUBE_UNSUPPORTED,
     INSTAGRAM_UNSUPPORTED,
+    X_INVALID_URL,
+    X_NO_VIDEO,
+    X_UNAVAILABLE,
+    X_EXTRACTION_FAILED,
     HOST_UNREACHABLE,
     NETWORK_GENERIC,
     CANCELLED,
@@ -90,6 +104,7 @@ data class LinkExtractorScreenState(
     val sessionHistory: List<CurlResolutionResult> = emptyList(),
     val updateCheckState: UpdateCheckState = UpdateCheckState.Idle,
     val pendingYouTubeResult: CurlResolutionResult? = null,
+    val pendingXResult: CurlResolutionResult? = null,
 )
 
 class LinkExtractorViewModel(
@@ -160,6 +175,23 @@ class LinkExtractorViewModel(
 
     fun navigateTo(destination: AppDestination) {
         _screenState.update { it.copy(destination = destination) }
+    }
+
+    fun submitLinkFromHome(rawInput: String) {
+        val normalized = when (val action = classifyHomeInput(rawInput)) {
+            is HomeInputAction.ResolveLink -> action.normalizedInput
+            is HomeInputAction.SearchMedia -> action.query
+            HomeInputAction.OpenDiscover -> rawInput.trim()
+        }
+        _screenState.update {
+            it.copy(
+                destination = AppDestination.RESOLVER,
+                inputText = normalized,
+                detectedClipboardUrl = null,
+                capturedFromExternalIntent = false,
+            )
+        }
+        executeExtraction()
     }
 
     fun setDownloadFilter(filter: DownloadFilter) {
@@ -235,6 +267,7 @@ class LinkExtractorViewModel(
                 capturedFromExternalIntent = false,
                 uiState = ExtractorUiState.Idle,
                 pendingYouTubeResult = null,
+                pendingXResult = null,
             )
         }
     }
@@ -309,6 +342,33 @@ class LinkExtractorViewModel(
         _screenState.update { it.copy(pendingYouTubeResult = null) }
     }
 
+    fun selectXVariantOption(variant: XVideoVariant): CurlResolutionResult? {
+        val baseResult = _screenState.value.pendingXResult
+            ?: (_screenState.value.uiState as? ExtractorUiState.Success)?.result
+            ?: return null
+
+        val updated = baseResult.copy(
+            directVideoUrl = variant.url,
+            filename = variant.suggestedFileName,
+            extension = variant.container,
+            fileSizeFormatted = variant.fileSizeFormatted,
+        )
+        addSuccessResult(updated)
+        _screenState.update { it.copy(pendingXResult = null) }
+        return updated
+    }
+
+    fun openXQualityPicker() {
+        val current = (_screenState.value.uiState as? ExtractorUiState.Success)?.result ?: return
+        if (current.xVideoVariants.isNotEmpty()) {
+            _screenState.update { it.copy(pendingXResult = current) }
+        }
+    }
+
+    fun dismissXQualityPicker() {
+        _screenState.update { it.copy(pendingXResult = null) }
+    }
+
     fun executeExtraction(cookieHeader: String? = null) {
         val rawInput = _screenState.value.inputText.trim()
         if (rawInput.isEmpty()) {
@@ -316,6 +376,7 @@ class LinkExtractorViewModel(
                 it.copy(
                     uiState = ExtractorUiState.Error(ErrorType.EMPTY_URL),
                     pendingYouTubeResult = null,
+                    pendingXResult = null,
                 )
             }
             return
@@ -339,11 +400,17 @@ class LinkExtractorViewModel(
         }
 
         val extractedUrl = VideoLinkExtractor.extractInputUrl(rawInput)
+            ?: if (XTwitterExtractor.isXTwitterUrl(rawInput)) {
+                "https://${rawInput.trimStart('/')}"
+            } else {
+                null
+            }
         if (extractedUrl == null) {
             _screenState.update {
                 it.copy(
                     uiState = ExtractorUiState.Error(ErrorType.INVALID_URL),
                     pendingYouTubeResult = null,
+                    pendingXResult = null,
                 )
             }
             return
@@ -354,6 +421,7 @@ class LinkExtractorViewModel(
             _screenState.update {
                 it.copy(
                     pendingYouTubeResult = null,
+                    pendingXResult = null,
                     uiState = ExtractorUiState.Loading(
                         liveLog = "$ curl -L -v \"$extractedUrl\"\n",
                         currentHop = 1,
@@ -402,6 +470,23 @@ class LinkExtractorViewModel(
                 val errType = when (e.platform) {
                     SocialPlatform.YOUTUBE -> ErrorType.YOUTUBE_UNSUPPORTED
                     SocialPlatform.INSTAGRAM -> ErrorType.INSTAGRAM_UNSUPPORTED
+                    SocialPlatform.X_TWITTER -> ErrorType.X_EXTRACTION_FAILED
+                }
+                _screenState.update {
+                    it.copy(
+                        uiState = ExtractorUiState.Error(
+                            errorType = errType,
+                            verboseLog = e.verboseLog,
+                        ),
+                        isLogExpanded = it.isDeveloperMode,
+                    )
+                }
+            } catch (e: XExtractionException) {
+                val errType = when (e.error) {
+                    XExtractionError.INVALID_URL -> ErrorType.X_INVALID_URL
+                    XExtractionError.NO_VIDEO_IN_POST -> ErrorType.X_NO_VIDEO
+                    XExtractionError.UNAVAILABLE_OR_RESTRICTED -> ErrorType.X_UNAVAILABLE
+                    XExtractionError.EXTRACTION_FAILED -> ErrorType.X_EXTRACTION_FAILED
                 }
                 _screenState.update {
                     it.copy(
@@ -457,6 +542,46 @@ class LinkExtractorViewModel(
             )
         }
     }
+}
+
+private val SCHEMELESS_DOMAIN_REGEX = Regex(
+    """^(?:www\.)?[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})+(?:[:/?#][^\s]*)?$"""
+)
+
+private val RECOGNIZED_SCHEMELESS_SUFFIXES = setOf(
+    "com", "net", "org", "io", "tv", "me", "co", "top", "ir", "xyz", "info", "biz", "app", "dev",
+    "mp4", "mkv", "avi", "mov", "webm", "m3u8", "mp3", "m4a", "zip", "rar", "apk", "pdf",
+)
+
+fun classifyHomeInput(rawInput: String): HomeInputAction {
+    val trimmed = rawInput.trim()
+    if (trimmed.isEmpty()) return HomeInputAction.OpenDiscover
+
+    if (VideoLinkExtractor.looksLikeRawCurlTrace(trimmed) ||
+        trimmed.startsWith("curl ", ignoreCase = true)
+    ) {
+        return HomeInputAction.ResolveLink(trimmed)
+    }
+
+    val extractedUrl = VideoLinkExtractor.extractInputUrl(trimmed)
+    if (extractedUrl != null) {
+        return HomeInputAction.ResolveLink(extractedUrl)
+    }
+
+    if (XTwitterExtractor.isXTwitterUrl(trimmed)) {
+        return HomeInputAction.ResolveLink("https://${trimmed.trimStart('/')}")
+    }
+
+    if (!trimmed.any { it.isWhitespace() } && SCHEMELESS_DOMAIN_REGEX.matches(trimmed)) {
+        val hostPart = trimmed.substringBefore('/').substringBefore('?').substringBefore(':')
+        val lastLabel = hostPart.substringAfterLast('.', "").lowercase(Locale.US)
+        val hasPathOrQuery = '/' in trimmed || '?' in trimmed
+        if (hasPathOrQuery || lastLabel in RECOGNIZED_SCHEMELESS_SUFFIXES) {
+            return HomeInputAction.ResolveLink("https://$trimmed")
+        }
+    }
+
+    return HomeInputAction.SearchMedia(trimmed)
 }
 
 fun filterDownloadTasks(tasks: List<DownloadTask>, filter: DownloadFilter): List<DownloadTask> {
