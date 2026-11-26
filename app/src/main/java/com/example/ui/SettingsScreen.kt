@@ -777,10 +777,11 @@ private fun GitHubUpdateCard(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
-                                    if (!result.apkDownloadUrl.isNullOrBlank()) {
+                                    val apkDownloadUrl = result.apkDownloadUrl?.takeIf { it.isNotBlank() }
+                                    if (apkDownloadUrl != null) {
                                         Button(
                                             onClick = {
-                                                onDownloadReleaseApk(result.apkDownloadUrl, result.apkFileName)
+                                                onDownloadReleaseApk(apkDownloadUrl, result.apkFileName)
                                             },
                                             modifier = Modifier
                                                 .weight(1f)
@@ -1125,9 +1126,10 @@ private fun DeveloperTmdbBackendCard(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        if (!diagnostic.errorMessage.isNullOrBlank()) {
+                        val diagError = diagnostic.errorMessage?.takeIf { it.isNotBlank() }
+                        if (diagError != null) {
                             Text(
-                                text = diagnostic.errorMessage,
+                                text = diagError,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.error,
                             )

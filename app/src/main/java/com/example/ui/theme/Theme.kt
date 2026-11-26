@@ -13,17 +13,6 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 
-enum class ThemeMode(val code: String) {
-    SYSTEM("system"),
-    DARK("dark"),
-    LIGHT("light");
-
-    companion object {
-        fun fromCode(code: String?): ThemeMode =
-            entries.firstOrNull { it.code.equals(code, ignoreCase = true) } ?: SYSTEM
-    }
-}
-
 private val DarkColorScheme = darkColorScheme(
     primary = CyanPrimaryDark,
     onPrimary = OnCyanPrimaryDark,

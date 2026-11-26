@@ -5,7 +5,7 @@ import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 
-class MediaPersistence(context: Context) {
+class MediaPersistence(context: Context) : ArchiveCacheStore {
 
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -201,12 +201,12 @@ class MediaPersistence(context: Context) {
         atomicWrite(sourceSitesFile, arr.toString())
     }
 
-    fun archiveCacheFile(siteId: String): File {
+    override fun archiveCacheFile(siteId: String): File {
         val safeId = siteId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
         return File(cacheDir, "archive_${safeId}.tsv")
     }
 
-    fun loadTrendingCache(): TrendingFeedBundle? = synchronized(lock) {
+    override fun loadTrendingCache(): TrendingFeedBundle? = synchronized(lock) {
         if (!trendingCacheFile.exists()) return null
         return try {
             val root = JSONObject(trendingCacheFile.readText())
@@ -236,7 +236,7 @@ class MediaPersistence(context: Context) {
         }
     }
 
-    fun saveTrendingCache(bundle: TrendingFeedBundle) = synchronized(lock) {
+    override fun saveTrendingCache(bundle: TrendingFeedBundle) = synchronized(lock) {
         val moviesArr = JSONArray().apply {
             bundle.movies.forEach { put(serializeMediaSummary(it)) }
         }

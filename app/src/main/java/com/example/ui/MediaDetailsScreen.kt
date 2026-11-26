@@ -707,9 +707,10 @@ fun MediaDetailsScreen(
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
                                             )
-                                            if (!member.character.isNullOrBlank()) {
+                                            val memberCharacter = member.character?.takeIf { it.isNotBlank() }
+                                            if (memberCharacter != null) {
                                                 Text(
-                                                    text = member.character,
+                                                    text = memberCharacter,
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                     maxLines = 1,
@@ -897,9 +898,10 @@ private fun SeasonAccordionCard(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
-                                if (!ep.overview.isNullOrBlank()) {
+                                val epOverview = ep.overview?.takeIf { it.isNotBlank() }
+                                if (epOverview != null) {
                                     Text(
-                                        text = ep.overview,
+                                        text = epOverview,
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 2,

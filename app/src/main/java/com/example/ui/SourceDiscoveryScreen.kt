@@ -158,9 +158,10 @@ fun SourceDiscoveryScreen(
                                 modifier = Modifier.weight(1f),
                             )
                         }
-                        if (!target.persianTitle.isNullOrBlank()) {
+                        val persianTitle = target.persianTitle?.takeIf { it.isNotBlank() }
+                        if (persianTitle != null) {
                             Text(
-                                text = target.persianTitle,
+                                text = persianTitle,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary,
                             )

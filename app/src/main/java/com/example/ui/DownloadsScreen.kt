@@ -860,9 +860,10 @@ private fun DownloadTaskCard(
                 }
             }
 
-            if (task.status == DownloadStatus.FAILED && !task.errorMessage.isNullOrBlank()) {
+            val failedError = task.errorMessage?.takeIf { it.isNotBlank() }
+            if (task.status == DownloadStatus.FAILED && failedError != null) {
                 Text(
-                    text = task.errorMessage,
+                    text = failedError,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error,
                     maxLines = 2,

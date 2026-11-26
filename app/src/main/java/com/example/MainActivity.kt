@@ -13,6 +13,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.download.DownloadForegroundService
 import com.example.download.DownloadManagerHolder
 import com.example.intent.VlcIntentHelper
+import com.example.media.AppRuntimeConfig
 import com.example.media.MovieDiscoveryViewModel
 import com.example.ui.AppDestination
 import com.example.ui.AppLanguage
@@ -33,6 +34,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        AppRuntimeConfig.configure(
+            tmdbProxyBaseUrl = BuildConfig.TMDB_PROXY_BASE_URL,
+            tmdbMaskHex = BuildConfig.TMDB_MASK_HEX,
+            tmdbTokenBlob = BuildConfig.TMDB_TOKEN_BLOB,
+            tmdbKeyBlob = BuildConfig.TMDB_KEY_BLOB,
+        )
 
         val downloadEngine = DownloadManagerHolder.get(applicationContext)
         discoveryViewModel.initialize(applicationContext)

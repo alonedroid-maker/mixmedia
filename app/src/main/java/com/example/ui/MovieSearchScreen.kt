@@ -1331,13 +1331,14 @@ fun TrendingMediaCard(
                                 )
                             }
                         }
-                        if (item.mediaType == MediaType.TV && item.seasonCount != null) {
+                        val seasonCount = item.seasonCount
+                        if (item.mediaType == MediaType.TV && seasonCount != null) {
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
                                 color = MaterialTheme.colorScheme.primaryContainer,
                             ) {
                                 Text(
-                                    text = strings.discover.labelSeasonsCount(item.seasonCount),
+                                    text = strings.discover.labelSeasonsCount(seasonCount),
                                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
