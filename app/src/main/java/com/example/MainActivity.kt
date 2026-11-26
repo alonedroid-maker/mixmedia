@@ -49,6 +49,7 @@ class MainActivity : ComponentActivity() {
                 vlcInstalled = VlcIntentHelper.isVlcInstalled(this),
                 developerMode = savedDevMode,
                 themeMode = savedThemeMode,
+                useSeparateTabs = discoveryViewModel.state.value.preferences.useSeparateTabs,
             )
             handleIncomingIntent(intent)
         }

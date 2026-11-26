@@ -90,6 +90,7 @@ import com.example.media.TrendingTimeWindow
 import com.example.media.TvReleaseStatus
 import com.example.media.WatchProviderInfo
 import com.example.media.WatchRegions
+import com.example.network.CurlResolutionResult
 import java.text.DateFormat
 import java.util.Date
 
@@ -120,9 +121,26 @@ fun MovieSearchScreen(
     onUpdateDiscoverFilters: ((TmdbDiscoverFilters) -> TmdbDiscoverFilters) -> Unit = {},
     onClearDiscoverFilters: () -> Unit = {},
     onLoadMore: () -> Unit = {},
+    extractorState: LinkExtractorScreenState? = null,
+    activeDownloadCount: Int = 0,
+    onExtractorInputChanged: (String) -> Unit = {},
+    onResolveLink: (String) -> Unit = {},
+    onClearExtractor: () -> Unit = {},
+    onCancelExtraction: () -> Unit = {},
+    onDismissInlineResult: () -> Unit = {},
+    onToggleLogExpanded: () -> Unit = {},
+    onSelectHistoryItem: (CurlResolutionResult) -> Unit = {},
+    onAcceptClipboardUrl: () -> Unit = {},
+    onDismissClipboardUrl: () -> Unit = {},
+    onDownloadInApp: (CurlResolutionResult) -> Unit = {},
+    onDownloadAuthorizedUrl: (url: String, suggestedName: String?) -> Unit = { _, _ -> },
+    onOpenXQualityPicker: () -> Unit = {},
+    onOpenDownloads: () -> Unit = {},
+    onShowMessage: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val focusManager = LocalFocusManager.current
+    val unifiedExtractorState = extractorState?.takeIf { !it.useSeparateTabs }
     val typeFilter = when (state.selectedTypeFilter) {
         null -> SearchMediaTypeFilter.ALL
         MediaType.MOVIE -> SearchMediaTypeFilter.MOVIE
@@ -147,22 +165,55 @@ fun MovieSearchScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item(key = "discover_header") {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = strings.discover.discoverTitle,
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        text = strings.discover.discoverSubtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+            if (unifiedExtractorState != null) {
+                item(key = "unified_hero_resolver") {
+                    UnifiedMoviesHeroAndResolverCard(
+                        discoveryState = state,
+                        extractorState = unifiedExtractorState,
+                        activeDownloadCount = activeDownloadCount,
+                        defaultBrowserUrl = state.sourceSites.firstOrNull { it.enabled }?.baseUrl ?: "https://www.google.com",
+                        strings = strings,
+                        onQueryChanged = onQueryChanged,
+                        onSubmitSearch = onSubmitSearch,
+                        onClearSearch = onClearSearch,
+                        onSelectRecentSearch = onSelectRecentSearch,
+                        onRemoveRecentSearch = onRemoveRecentSearch,
+                        onUpdateDiscoverFilters = onUpdateDiscoverFilters,
+                        onClearDiscoverFilters = onClearDiscoverFilters,
+                        onExtractorInputChanged = onExtractorInputChanged,
+                        onResolveLink = onResolveLink,
+                        onClearExtractor = onClearExtractor,
+                        onCancelExtraction = onCancelExtraction,
+                        onDismissInlineResult = onDismissInlineResult,
+                        onToggleLogExpanded = onToggleLogExpanded,
+                        onSelectHistoryItem = onSelectHistoryItem,
+                        onAcceptClipboardUrl = onAcceptClipboardUrl,
+                        onDismissClipboardUrl = onDismissClipboardUrl,
+                        onDownloadInApp = onDownloadInApp,
+                        onDownloadAuthorizedUrl = onDownloadAuthorizedUrl,
+                        onOpenXQualityPicker = onOpenXQualityPicker,
+                        onOpenDownloads = onOpenDownloads,
+                        onOpenInAppBrowser = onOpenProviderUrl,
+                        onShowMessage = onShowMessage,
                     )
                 }
-            }
+            } else {
+                item(key = "discover_header") {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = strings.discover.discoverTitle,
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        Text(
+                            text = strings.discover.discoverSubtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
 
-            item(key = "search_box") {
+                item(key = "search_box") {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.large,
@@ -297,6 +348,7 @@ fun MovieSearchScreen(
                         }
                     }
                 }
+            }
             }
 
             if (state.isDiscoverOrSearchActive) {
@@ -783,7 +835,7 @@ fun MovieSearchScreen(
 }
 
 @Composable
-private fun DiscoverFilterChipsRow(
+internal fun DiscoverFilterChipsRow(
     state: MovieDiscoveryState,
     strings: AppStrings,
     onUpdateDiscoverFilters: ((TmdbDiscoverFilters) -> TmdbDiscoverFilters) -> Unit,
@@ -1011,7 +1063,8 @@ fun MediaResultCard(
             .testTag("media_card_${item.id}"),
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         Row(
             modifier = Modifier
@@ -1186,7 +1239,8 @@ fun TrendingMediaCard(
             .testTag("trending_card_${item.id}"),
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         Column(
             modifier = Modifier

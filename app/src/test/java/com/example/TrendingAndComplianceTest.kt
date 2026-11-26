@@ -435,6 +435,21 @@ class TrendingAndComplianceTest {
 
             assertTrue(s.discover.youtubeKeyLabel.isNotBlank())
             assertTrue(s.discover.youtubeKeyHelper.isNotBlank())
+
+            assertTrue(s.ui.sectionNavigationLayout.isNotBlank())
+            assertTrue(s.ui.separateTabsTitle.isNotBlank())
+            assertTrue(s.ui.separateTabsDesc.isNotBlank())
+            assertTrue(s.ui.unifiedModeBadge.isNotBlank())
+            assertTrue(s.ui.separateModeBadge.isNotBlank())
+            assertTrue(s.ui.unifiedHeroTitle.isNotBlank())
+            assertTrue(s.ui.unifiedHeroSubtitle.isNotBlank())
+            assertTrue(s.ui.unifiedSmartPlaceholder.isNotBlank())
+            assertTrue(s.ui.unifiedActionResolve.isNotBlank())
+            assertTrue(s.ui.unifiedQuickBrowser.isNotBlank())
+            assertTrue(s.ui.unifiedQuickResolverTools.isNotBlank())
+            assertTrue(s.ui.unifiedHideResolverTools.isNotBlank())
+            assertTrue(s.ui.unifiedInlineResolverTitle.isNotBlank())
+            assertTrue(s.ui.unifiedDismissResult.isNotBlank())
         }
     }
 

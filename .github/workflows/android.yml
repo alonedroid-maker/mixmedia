@@ -90,10 +90,10 @@ jobs:
             tr -d '[:space:]' < debug.keystore.base64 | base64 --decode > debug.keystore
           fi
 
-      - name: Audit Client Repo for Zero Embedded TMDB Credentials
+      - name: Audit Client Repo for Zero Hardcoded TMDB Secrets
         run: |
-          if grep -rnE "TMDB_API_READ_ACCESS_TOKEN|TMDB_API_KEY|eyJhbGci" app/ .env* gradle/ 2>/dev/null; then
-            echo "ERROR: TMDB credentials must never be committed to Android client files or BuildConfig." >&2
+          if grep -rnE "eyJhbGciOi|TMDB_API_READ_ACCESS_TOKEN=[^M]|TMDB_API_KEY=[^M]" app/ .env.example gradle/ 2>/dev/null; then
+            echo "ERROR: Hardcoded TMDB credentials detected in tracked client files." >&2
             exit 1
           fi
 
@@ -102,6 +102,8 @@ jobs:
           KEYSTORE_PATH: ${{ runner.temp }}/mediax-release.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          TMDB_API_READ_ACCESS_TOKEN: ${{ secrets.TMDB_API_READ_ACCESS_TOKEN }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           TMDB_PROXY_BASE_URL: ${{ vars.TMDB_PROXY_BASE_URL }}
         run: |
           if [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then

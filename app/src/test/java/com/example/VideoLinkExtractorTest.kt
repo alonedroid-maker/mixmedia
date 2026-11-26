@@ -24,10 +24,11 @@ import org.junit.Test
 class VideoLinkExtractorTest {
 
     @Test
-    fun `default viewmodel state starts in English on home tab`() {
+    fun `default viewmodel state starts in English on unified movies tab`() {
         val vm = LinkExtractorViewModel()
         assertEquals(AppLanguage.EN, vm.screenState.value.language)
-        assertEquals(AppDestination.HOME, vm.screenState.value.destination)
+        assertFalse(vm.screenState.value.useSeparateTabs)
+        assertEquals(AppDestination.DISCOVER, vm.screenState.value.destination)
         assertFalse(vm.screenState.value.isVlcInterceptorEnabled)
         assertFalse(vm.screenState.value.isDeveloperMode)
     }

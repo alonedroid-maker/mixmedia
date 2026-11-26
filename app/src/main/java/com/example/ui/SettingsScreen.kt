@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -113,6 +114,7 @@ fun SettingsScreen(
     onShowMessage: ((String) -> Unit)? = null,
     onUpdateTmdbProxyUrl: ((String) -> Unit)? = null,
     onTestTmdbBackend: ((String?) -> Unit)? = null,
+    onToggleUseSeparateTabs: ((Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var showPasswordDialog by remember { mutableStateOf(false) }
@@ -247,6 +249,101 @@ fun SettingsScreen(
                             }
                         }
                     }
+                }
+            }
+
+            // 1C. Navigation Layout (Unified 3-tab hub vs Classic 5-tab layout)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.large,
+                colors = CardDefaults.cardColors(
+                    containerColor = if (state.useSeparateTabs) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)
+                    } else {
+                        MaterialTheme.colorScheme.surface
+                    },
+                ),
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = if (state.useSeparateTabs) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+                    } else {
+                        MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
+                    },
+                ),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Tune,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = strings.ui.sectionNavigationLayout,
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Surface(
+                                    shape = CircleShape,
+                                    color = if (state.useSeparateTabs) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.secondaryContainer
+                                    },
+                                ) {
+                                    Text(
+                                        text = if (state.useSeparateTabs) {
+                                            strings.ui.separateModeBadge
+                                        } else {
+                                            strings.ui.unifiedModeBadge
+                                        },
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = if (state.useSeparateTabs) {
+                                            MaterialTheme.colorScheme.onPrimaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.onSecondaryContainer
+                                        },
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+                        }
+
+                        Switch(
+                            checked = state.useSeparateTabs,
+                            onCheckedChange = { enabled -> onToggleUseSeparateTabs?.invoke(enabled) },
+                            enabled = onToggleUseSeparateTabs != null,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .semantics { contentDescription = strings.ui.separateTabsTitle }
+                                .testTag("settings_separate_tabs_switch"),
+                        )
+                    }
+
+                    Text(
+                        text = strings.ui.separateTabsTitle,
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        text = strings.ui.separateTabsDesc,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 

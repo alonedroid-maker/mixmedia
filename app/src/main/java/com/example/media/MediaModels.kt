@@ -331,6 +331,7 @@ data class MediaPreferences(
     val watchRegion: String = "US",
     val trendingWindow: TrendingTimeWindow = TrendingTimeWindow.DAY,
     val tmdbProxyUrl: String = "",
+    val useSeparateTabs: Boolean = false,
 ) {
     fun effectiveProxyBaseUrl(buildConfigDefault: String = com.example.BuildConfig.TMDB_PROXY_BASE_URL): String =
         tmdbProxyUrl.trim().ifBlank { buildConfigDefault.trim() }

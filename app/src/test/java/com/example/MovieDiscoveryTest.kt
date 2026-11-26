@@ -19,6 +19,8 @@ import com.example.media.SourceSiteConfig
 import com.example.media.SourceSitesCatalog
 import com.example.media.WebSourceResult
 import com.example.media.ZeroKeyMetadataEnricher
+import com.example.ui.AppDestination
+import com.example.ui.LinkExtractorViewModel
 import com.example.ui.SourceMetaCategory
 import com.example.ui.parseHonestSourceBadges
 import java.io.ByteArrayInputStream
@@ -341,5 +343,46 @@ class MovieDiscoveryTest {
             assertTrue(sourcesBundle.generatedQueries.isNotEmpty())
             assertTrue(sourcesBundle.siteResults.isNotEmpty() || sourcesBundle.webSearchResults.isNotEmpty())
         }
+    }
+
+    @Test
+    fun `unified movies tab is default and settings toggle restores separate home and resolver tabs`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val persistence = MediaPersistence(context)
+
+        // Default preference keeps Home + Resolver merged into Movies tab
+        assertFalse(MediaPreferences().useSeparateTabs)
+
+        persistence.savePreferences(MediaPreferences(useSeparateTabs = true))
+        assertTrue(persistence.loadPreferences().useSeparateTabs)
+        persistence.savePreferences(MediaPreferences(useSeparateTabs = false))
+        assertFalse(persistence.loadPreferences().useSeparateTabs)
+
+        val vm = LinkExtractorViewModel()
+        assertFalse(vm.screenState.value.useSeparateTabs)
+        assertEquals(AppDestination.DISCOVER, vm.screenState.value.destination)
+
+        // Navigation / clipboard / external links stay inside DISCOVER while unified
+        vm.navigateTo(AppDestination.HOME)
+        assertEquals(AppDestination.DISCOVER, vm.screenState.value.destination)
+        vm.navigateTo(AppDestination.RESOLVER)
+        assertEquals(AppDestination.DISCOVER, vm.screenState.value.destination)
+
+        vm.onClipboardTextObserved("https://example.com/video.mp4")
+        vm.acceptDetectedClipboardUrl()
+        assertEquals(AppDestination.DISCOVER, vm.screenState.value.destination)
+
+        // Turning on classic separate tabs in Settings restores HOME and RESOLVER routing
+        vm.setUseSeparateTabs(true)
+        assertTrue(vm.screenState.value.useSeparateTabs)
+        vm.navigateTo(AppDestination.HOME)
+        assertEquals(AppDestination.HOME, vm.screenState.value.destination)
+        vm.handleIncomingExternalUrl("https://example.com/stream.m3u8")
+        assertEquals(AppDestination.RESOLVER, vm.screenState.value.destination)
+
+        // Turning separate tabs back off collapses RESOLVER/HOME safely to DISCOVER
+        vm.setUseSeparateTabs(false)
+        assertFalse(vm.screenState.value.useSeparateTabs)
+        assertEquals(AppDestination.DISCOVER, vm.screenState.value.destination)
     }
 }

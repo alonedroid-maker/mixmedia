@@ -140,10 +140,17 @@ class MovieDiscoveryViewModel(
     private fun buildInitialDiagnostic(prefs: MediaPreferences): TmdbBackendDiagnostic {
         val raw = prefs.effectiveProxyBaseUrl()
         val normalized = TmdbProxyClientFactory.normalizeProxyBaseUrl(raw)
-        val host = normalized?.toHttpUrlOrNull()?.host ?: ""
+        if (normalized != null) {
+            return TmdbBackendDiagnostic(
+                endpointHost = normalized.toHttpUrlOrNull()?.host ?: "",
+                isConfigured = true,
+            )
+        }
+        val isDirect = metadataRepo.isUsingDirectTmdb(prefs)
         return TmdbBackendDiagnostic(
-            endpointHost = host,
-            isConfigured = normalized != null,
+            endpointHost = if (isDirect) "api.themoviedb.org (Direct)" else "",
+            isConfigured = isDirect,
+            tmdbSecretConfigured = isDirect,
         )
     }
 

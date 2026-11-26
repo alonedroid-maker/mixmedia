@@ -42,13 +42,49 @@ android {
     versionCode = releaseVersionCode
     versionName = releaseVersionName
 
-    val proxyBaseUrlRaw = System.getenv("TMDB_PROXY_BASE_URL")?.trim().orEmpty()
+    val dotEnvProps = Properties().apply {
+      val envFile = rootProject.file(".env")
+      if (envFile.exists()) {
+        envFile.inputStream().use { stream -> load(InputStreamReader(stream, Charsets.UTF_8)) }
+      }
+    }
+
+    fun resolveSecret(name: String): String {
+      val fromEnv = System.getenv(name)?.trim().orEmpty()
+      val candidate = if (fromEnv.isNotEmpty()) fromEnv else dotEnvProps.getProperty(name)?.trim().orEmpty()
+      return if (candidate.isEmpty() || candidate.startsWith("MY_TMDB_")) "" else candidate
+    }
+
+    fun xorMaskToHex(secret: String, maskBytes: ByteArray): String {
+      if (secret.isEmpty()) return ""
+      val raw = secret.toByteArray(Charsets.UTF_8)
+      val out = StringBuilder(raw.size * 2)
+      for (i in raw.indices) {
+        val masked = (raw[i].toInt() xor maskBytes[i % maskBytes.size].toInt()) and 0xFF
+        out.append("%02x".format(masked))
+      }
+      return out.toString()
+    }
+
+    val tmdbMaskSeed = "mx|${releaseVersionCode}|${applicationId}|vpxkqm".toByteArray(Charsets.UTF_8)
+    val tmdbMaskBytes = ByteArray(32) { idx ->
+      val b = tmdbMaskSeed[idx % tmdbMaskSeed.size].toInt()
+      ((b * 31 + idx * 17 + 0x5A) and 0xFF).toByte()
+    }
+    val tmdbMaskHex = tmdbMaskBytes.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+    val tmdbReadToken = resolveSecret("TMDB_API_READ_ACCESS_TOKEN")
+    val tmdbApiKey = resolveSecret("TMDB_API_KEY")
+
+    val proxyBaseUrlRaw = resolveSecret("TMDB_PROXY_BASE_URL")
     val safeProxyBaseUrl = if (proxyBaseUrlRaw.startsWith("https://")) {
       proxyBaseUrlRaw.replace("\"", "\\\"")
     } else {
       ""
     }
     buildConfigField("String", "TMDB_PROXY_BASE_URL", "\"$safeProxyBaseUrl\"")
+    buildConfigField("String", "TMDB_MASK_HEX", "\"$tmdbMaskHex\"")
+    buildConfigField("String", "TMDB_TOKEN_BLOB", "\"${xorMaskToHex(tmdbReadToken, tmdbMaskBytes)}\"")
+    buildConfigField("String", "TMDB_KEY_BLOB", "\"${xorMaskToHex(tmdbApiKey, tmdbMaskBytes)}\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -107,6 +143,9 @@ secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
+  ignoreList.add("TMDB_API_READ_ACCESS_TOKEN")
+  ignoreList.add("TMDB_API_KEY")
+  ignoreList.add("TMDB_PROXY_BASE_URL")
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }

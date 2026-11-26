@@ -22,6 +22,7 @@ class MetadataRepository(
     private val proxyServiceOverride: TmdbProxyApiService? = null,
     private val allowCleartextProxyForTests: Boolean = false,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val credentialProvider: TmdbCredentialProvider = TmdbCredentialProvider(),
 ) {
 
     private val zeroKey = ZeroKeyMetadataEnricher(client)
@@ -44,6 +45,7 @@ class MetadataRepository(
     private var cachedTrendingFeed: TrendingFeedBundle? = null
     private var cachedProxyUrlKey: String = ""
     private var cachedProxyService: TmdbProxyApiService? = null
+    private var cachedDirectService: TmdbDirectApiService? = null
 
     fun clearMemoryCaches() {
         synchronized(cacheLock) {
@@ -82,8 +84,32 @@ class MetadataRepository(
         }
     }
 
+    private fun resolveDirectService(): TmdbDirectApiService? {
+        if (!credentialProvider.hasDirectCredentials()) return null
+        synchronized(cacheLock) {
+            cachedDirectService?.let { return it }
+            val created = TmdbProxyClientFactory.createDirect(
+                baseClient = client,
+                credentialProvider = credentialProvider,
+            )
+            if (created != null) {
+                cachedDirectService = created
+            }
+            return created
+        }
+    }
+
+    internal fun resolveTmdbBackend(preferences: MediaPreferences): TmdbBackendClient? {
+        resolveProxyService(preferences)?.let { return WorkerTmdbBackendClient(it) }
+        resolveDirectService()?.let { return DirectTmdbBackendClient(it) }
+        return null
+    }
+
+    fun isUsingDirectTmdb(preferences: MediaPreferences): Boolean =
+        resolveProxyService(preferences) == null && credentialProvider.hasDirectCredentials()
+
     fun isTmdbBackendConfigured(preferences: MediaPreferences): Boolean =
-        resolveProxyService(preferences) != null
+        resolveTmdbBackend(preferences) != null
 
     suspend fun searchMedia(
         rawQuery: String,
@@ -111,7 +137,7 @@ class MetadataRepository(
             return@withContext Result.success(MediaSearchPage(emptyList(), page = 1, totalPages = 1))
         }
 
-        val proxy = resolveProxyService(preferences)
+        val backend = resolveTmdbBackend(preferences)
         val region = WatchRegions.normalize(preferences.watchRegion)
         val cacheKey = listOf(
             trimmed.lowercase(Locale.US),
@@ -120,7 +146,8 @@ class MetadataRepository(
             filters.minRating?.toString() ?: "",
             filters.releaseYear?.toString() ?: "",
             safePage.toString(),
-            proxy != null,
+            backend != null,
+            backend?.isDirectTmdb ?: false,
             preferences.searchLanguage.code,
             region,
         ).joinToString("|")
@@ -132,7 +159,7 @@ class MetadataRepository(
         try {
             val pageResult = if (trimmed.length < 2 && filters.hasActiveFilters()) {
                 discoverViaProxyOrFallback(
-                    proxy = proxy,
+                    proxy = backend,
                     mediaTypeFilter = mediaTypeFilter,
                     filters = filters,
                     page = safePage,
@@ -141,7 +168,7 @@ class MetadataRepository(
                 )
             } else {
                 searchWithOptionalProxyAndZeroKey(
-                    proxy = proxy,
+                    proxy = backend,
                     rawQuery = trimmed,
                     mediaTypeFilter = mediaTypeFilter,
                     filters = filters,
@@ -163,7 +190,7 @@ class MetadataRepository(
     }
 
     private suspend fun discoverViaProxyOrFallback(
-        proxy: TmdbProxyApiService?,
+        proxy: TmdbBackendClient?,
         mediaTypeFilter: MediaType?,
         filters: TmdbDiscoverFilters,
         page: Int,
@@ -242,7 +269,7 @@ class MetadataRepository(
     }
 
     private suspend fun searchWithOptionalProxyAndZeroKey(
-        proxy: TmdbProxyApiService?,
+        proxy: TmdbBackendClient?,
         rawQuery: String,
         mediaTypeFilter: MediaType?,
         filters: TmdbDiscoverFilters,
@@ -375,7 +402,7 @@ class MetadataRepository(
     }
 
     suspend fun getAvailableGenres(preferences: MediaPreferences): List<MediaGenre> = withContext(ioDispatcher) {
-        val proxy = resolveProxyService(preferences) ?: return@withContext emptyList()
+        val backend = resolveTmdbBackend(preferences) ?: return@withContext emptyList()
         val lang = if (preferences.searchLanguage == SearchLanguagePreference.FA) "fa-IR" else "en-US"
         synchronized(cacheLock) {
             if (cachedGenres.isNotEmpty() && cachedGenresLang == lang) {
@@ -383,8 +410,8 @@ class MetadataRepository(
             }
         }
         val combined = supervisorScope {
-            val movieDef = async { runCatching { proxy.getMovieGenres(lang) }.getOrNull() }
-            val tvDef = async { runCatching { proxy.getTvGenres(lang) }.getOrNull() }
+            val movieDef = async { runCatching { backend.getMovieGenres(lang) }.getOrNull() }
+            val tvDef = async { runCatching { backend.getTvGenres(lang) }.getOrNull() }
             val mGenres = movieDef.await()?.takeIf { it.isSuccessful }?.body()?.genres.orEmpty()
             val tGenres = tvDef.await()?.takeIf { it.isSuccessful }?.body()?.genres.orEmpty()
             (mGenres + tGenres)
@@ -413,12 +440,12 @@ class MetadataRepository(
         synchronized(cacheLock) {
             watchProvidersCache[cacheKey]?.let { return@withContext it }
         }
-        val proxy = resolveProxyService(preferences) ?: return@withContext (summary.watchProviders to summary.watchProvidersPageUrl)
+        val backend = resolveTmdbBackend(preferences) ?: return@withContext (summary.watchProviders to summary.watchProvidersPageUrl)
         val response = runCatching {
             if (summary.mediaType == MediaType.TV) {
-                proxy.getTvWatchProviders(tmdbId, region = normalizedRegion)
+                backend.getTvWatchProviders(tmdbId, region = normalizedRegion)
             } else {
-                proxy.getMovieWatchProviders(tmdbId, region = normalizedRegion)
+                backend.getMovieWatchProviders(tmdbId, region = normalizedRegion)
             }
         }.getOrNull()
 
@@ -434,18 +461,57 @@ class MetadataRepository(
     }
 
     suspend fun testBackendConnection(proxyBaseUrl: String): TmdbBackendDiagnostic = withContext(ioDispatcher) {
+        val trimmedUrl = proxyBaseUrl.trim()
+        if (trimmedUrl.isEmpty() && credentialProvider.hasDirectCredentials()) {
+            val directService = resolveDirectService()
+            if (directService != null) {
+                val started = System.currentTimeMillis()
+                return@withContext try {
+                    val resp = directService.getConfiguration()
+                    resp.body()?.close()
+                    val latency = (System.currentTimeMillis() - started).coerceAtLeast(1L)
+                    TmdbBackendDiagnostic(
+                        endpointHost = "api.themoviedb.org (Direct)",
+                        isConfigured = true,
+                        isTesting = false,
+                        isReachable = resp.isSuccessful,
+                        tmdbSecretConfigured = true,
+                        authMode = credentialProvider.authMode(),
+                        httpStatus = resp.code(),
+                        latencyMs = latency,
+                        checkedAtMillis = System.currentTimeMillis(),
+                        errorMessage = if (resp.isSuccessful) null else "HTTP ${resp.code()}",
+                    )
+                } catch (e: Exception) {
+                    val latency = (System.currentTimeMillis() - started).coerceAtLeast(1L)
+                    TmdbBackendDiagnostic(
+                        endpointHost = "api.themoviedb.org (Direct)",
+                        isConfigured = true,
+                        isTesting = false,
+                        isReachable = false,
+                        tmdbSecretConfigured = true,
+                        authMode = credentialProvider.authMode(),
+                        latencyMs = latency,
+                        checkedAtMillis = System.currentTimeMillis(),
+                        errorMessage = sanitizeErrorMessage(e.message),
+                    )
+                }
+            }
+        }
+
         val normalized = TmdbProxyClientFactory.normalizeProxyBaseUrl(
-            rawUrl = proxyBaseUrl,
+            rawUrl = trimmedUrl,
             allowHttpForLocalhost = allowCleartextProxyForTests,
         )
         if (normalized == null) {
             return@withContext TmdbBackendDiagnostic(
-                endpointHost = proxyBaseUrl.trim(),
+                endpointHost = trimmedUrl,
                 isConfigured = false,
                 isTesting = false,
                 isReachable = false,
+                tmdbSecretConfigured = false,
                 checkedAtMillis = System.currentTimeMillis(),
-                errorMessage = "Proxy URL is not configured (HTTPS URL required).",
+                errorMessage = "TMDB build credentials and Proxy URL are both unconfigured.",
             )
         }
         val host = normalized.toHttpUrlOrNull()?.host ?: normalized
@@ -488,18 +554,24 @@ class MetadataRepository(
                 isReachable = false,
                 latencyMs = latency,
                 checkedAtMillis = System.currentTimeMillis(),
-                errorMessage = e.message ?: "Connection failed",
+                errorMessage = sanitizeErrorMessage(e.message),
             )
         }
+    }
+
+    private fun sanitizeErrorMessage(raw: String?): String {
+        val msg = raw ?: return "Connection failed"
+        return msg.replace(Regex("api_key=[^&\\s]+"), "api_key=***")
+            .replace(Regex("Bearer\\s+[^\\s]+", RegexOption.IGNORE_CASE), "Bearer ***")
     }
 
     suspend fun getPopularDiscoverFeed(preferences: MediaPreferences): List<MediaSearchResult> = withContext(ioDispatcher) {
         synchronized(cacheLock) {
             if (cachedPopularFeed.isNotEmpty()) return@withContext cachedPopularFeed
         }
-        val proxy = resolveProxyService(preferences)
-        val items = if (proxy != null) {
-            fetchProxyTrendingOverview(proxy, preferences).ifEmpty {
+        val backend = resolveTmdbBackend(preferences)
+        val items = if (backend != null) {
+            fetchProxyTrendingOverview(backend, preferences).ifEmpty {
                 zeroKey.fetchPopularTvMazeShows(limit = 12)
             }
         } else {
@@ -512,7 +584,7 @@ class MetadataRepository(
     }
 
     private suspend fun fetchProxyTrendingOverview(
-        proxy: TmdbProxyApiService,
+        proxy: TmdbBackendClient,
         preferences: MediaPreferences,
     ): List<MediaSearchResult> = supervisorScope {
         val lang = if (preferences.searchLanguage == SearchLanguagePreference.FA) "fa-IR" else "en-US"
@@ -537,7 +609,7 @@ class MetadataRepository(
         forceRefresh: Boolean = false,
         nowMillis: Long = System.currentTimeMillis(),
     ): TrendingFeedBundle = withContext(ioDispatcher) {
-        val proxy = resolveProxyService(preferences)
+        val proxy = resolveTmdbBackend(preferences)
         val expectsFallback = proxy == null
         val requestedWindow = preferences.trendingWindow
         val requestedRegion = WatchRegions.normalize(preferences.watchRegion)
@@ -641,7 +713,7 @@ class MetadataRepository(
     }
 
     private suspend fun fetchProxyTrendingMoviesDigital(
-        proxy: TmdbProxyApiService,
+        proxy: TmdbBackendClient,
         window: TrendingTimeWindow,
         langPref: SearchLanguagePreference,
         region: String,
@@ -689,7 +761,7 @@ class MetadataRepository(
     }
 
     private suspend fun fetchProxyTrendingTvDetailed(
-        proxy: TmdbProxyApiService,
+        proxy: TmdbBackendClient,
         window: TrendingTimeWindow,
         langPref: SearchLanguagePreference,
         region: String,
@@ -725,9 +797,9 @@ class MetadataRepository(
         summary: MediaSearchResult,
         preferences: MediaPreferences,
     ): Result<MediaDetails> = withContext(ioDispatcher) {
-        val proxy = resolveProxyService(preferences)
+        val proxy = resolveTmdbBackend(preferences)
         val region = WatchRegions.normalize(preferences.watchRegion)
-        val cacheKey = "${summary.id}|${proxy != null}|${preferences.omdbApiKey.isNotBlank()}|$region|${preferences.searchLanguage.code}"
+        val cacheKey = "${summary.id}|${proxy != null}|${proxy?.isDirectTmdb ?: false}|${preferences.omdbApiKey.isNotBlank()}|$region|${preferences.searchLanguage.code}"
         synchronized(cacheLock) {
             detailsCache[cacheKey]?.let { return@withContext Result.success(it) }
         }
@@ -878,7 +950,7 @@ class MetadataRepository(
     }
 
     private suspend fun fetchProxyFullDetails(
-        proxy: TmdbProxyApiService,
+        proxy: TmdbBackendClient,
         summary: MediaSearchResult,
         langPref: SearchLanguagePreference,
         region: String,

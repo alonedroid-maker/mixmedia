@@ -8,6 +8,7 @@ import com.example.media.MetadataRepository
 import com.example.media.MovieDiscoveryViewModel
 import com.example.media.ProviderCategory
 import com.example.media.SearchLanguagePreference
+import com.example.media.TmdbCredentialProvider
 import com.example.media.TmdbDiscoverFilters
 import com.example.media.TmdbProxyClientFactory
 import com.example.media.TrendingTimeWindow
@@ -371,5 +372,141 @@ class TmdbProxyIntegrationTest {
         assertTrue(bundle.isUsingFallbackSources)
         assertEquals(listOf("Fallback Apple Movie"), bundle.movies.map { it.title })
         assertNotNull(repo)
+    }
+
+    @Test
+    fun `credential provider masks and decodes tmdb secrets without plaintext exposure and ignores placeholders`() {
+        val sampleToken = "token-read-sample-9988"
+        val sampleKey = "key_sample_4455"
+        val maskBytes = ByteArray(16) { ((it * 37 + 19) and 0xFF).toByte() }
+        val maskHex = maskBytes.joinToString("") { "%02x".format(it) }
+        val tokenBlob = TmdbCredentialProvider.encodeMaskedHex(sampleToken, maskBytes)
+        val keyBlob = TmdbCredentialProvider.encodeMaskedHex(sampleKey, maskBytes)
+
+        assertFalse(tokenBlob.contains(sampleToken))
+        assertFalse(keyBlob.contains(sampleKey))
+
+        val provider = TmdbCredentialProvider(
+            tokenBlobHex = tokenBlob,
+            keyBlobHex = keyBlob,
+            maskHex = maskHex,
+        )
+        assertTrue(provider.hasDirectCredentials())
+        assertEquals("bearer", provider.authMode())
+        assertEquals(sampleToken, provider.readAccessToken())
+        assertEquals(sampleKey, provider.apiKey())
+
+        val placeholderProvider = TmdbCredentialProvider(
+            tokenBlobHex = TmdbCredentialProvider.encodeMaskedHex("MY_TMDB_API_READ_ACCESS_TOKEN", maskBytes),
+            keyBlobHex = TmdbCredentialProvider.encodeMaskedHex("MY_TMDB_API_KEY", maskBytes),
+            maskHex = maskHex,
+        )
+        assertFalse(placeholderProvider.hasDirectCredentials())
+        assertEquals("none", placeholderProvider.authMode())
+    }
+
+    @Test
+    fun `direct tmdb mode connects to api themoviedb org without worker proxy`() = runBlocking {
+        val sampleToken = "direct-tmdb-bearer-token-test"
+        val maskBytes = ByteArray(16) { ((it * 29 + 7) and 0xFF).toByte() }
+        val maskHex = maskBytes.joinToString("") { "%02x".format(it) }
+        val provider = TmdbCredentialProvider(
+            tokenBlobHex = TmdbCredentialProvider.encodeMaskedHex(sampleToken, maskBytes),
+            keyBlobHex = "",
+            maskHex = maskHex,
+        )
+
+        val requestedUrls = CopyOnWriteArrayList<String>()
+        val mockClient = OkHttpClient.Builder()
+            .addInterceptor(Interceptor { chain ->
+                val req = chain.request()
+                val url = req.url.toString()
+                requestedUrls.add(url)
+                if (req.url.host == "api.themoviedb.org") {
+                    assertEquals("Bearer $sampleToken", req.header("Authorization"))
+                } else {
+                    assertNull("Non-TMDB hosts must never receive TMDB Authorization header", req.header("Authorization"))
+                    assertFalse(url.contains(sampleToken))
+                    return@Interceptor jsonResponse(req, 404, "{}")
+                }
+
+                val body = when {
+                    url.contains("/3/configuration") -> """{"images":{"secure_base_url":"https://image.tmdb.org/t/p/"}}"""
+                    url.contains("/3/genre/movie/list") -> """{"genres":[{"id":28,"name":"Action"}]}"""
+                    url.contains("/3/genre/tv/list") -> """{"genres":[{"id":18,"name":"Drama"}]}"""
+                    url.contains("/3/discover/movie") -> """
+                        {
+                          "page": 1,
+                          "total_pages": 1,
+                          "total_results": 1,
+                          "results": [
+                            { "id": 808, "title": "Direct TMDB Film", "release_date": "2025-04-01", "vote_average": 8.1 }
+                          ]
+                        }
+                    """.trimIndent()
+                    url.contains("/3/find/tt0816692") -> """
+                        {
+                          "movie_results": [{ "id": 157336, "title": "Interstellar" }],
+                          "tv_results": []
+                        }
+                    """.trimIndent()
+                    url.contains("/3/movie/157336") -> """
+                        {
+                          "id": 157336,
+                          "title": "Interstellar",
+                          "release_date": "2014-11-05",
+                          "vote_average": 8.4,
+                          "external_ids": { "imdb_id": "tt0816692" }
+                        }
+                    """.trimIndent()
+                    else -> "{}"
+                }
+                jsonResponse(req, 200, body)
+            })
+            .build()
+
+        val repo = MetadataRepository(client = mockClient, credentialProvider = provider)
+        val blankPrefs = MediaPreferences(tmdbProxyUrl = "", watchRegion = "US", searchLanguage = SearchLanguagePreference.EN)
+
+        assertTrue(repo.isUsingDirectTmdb(blankPrefs))
+        assertTrue(repo.isTmdbBackendConfigured(blankPrefs))
+
+        val diag = repo.testBackendConnection("")
+        assertTrue(diag.isConfigured)
+        assertEquals(true, diag.isReachable)
+        assertEquals("api.themoviedb.org (Direct)", diag.endpointHost)
+        assertEquals("bearer", diag.authMode)
+        assertEquals(true, diag.tmdbSecretConfigured)
+
+        val genres = repo.getAvailableGenres(blankPrefs)
+        assertEquals(listOf("Action", "Drama"), genres.map { it.name })
+
+        val discover = repo.searchAndDiscoverMedia(
+            rawQuery = "",
+            mediaTypeFilter = MediaType.MOVIE,
+            filters = TmdbDiscoverFilters(genreId = 28, minRating = 7.5, releaseYear = 2025),
+            page = 1,
+            preferences = blankPrefs,
+        ).getOrThrow()
+        assertTrue(discover.usedTmdbBackend)
+        assertEquals("Direct TMDB Film", discover.items.single().title)
+
+        val discoverUrl = requestedUrls.first { it.contains("/3/discover/movie") }
+        assertTrue(discoverUrl.contains("vote_average.gte=7.5"))
+        assertTrue(discoverUrl.contains("with_genres=28"))
+        assertTrue(discoverUrl.contains("year=2025"))
+
+        val details = repo.getMediaDetails(
+            summary = MediaSearchResult(
+                id = "imdb:tt0816692",
+                mediaType = MediaType.MOVIE,
+                title = "Interstellar",
+                imdbId = "tt0816692",
+            ),
+            preferences = blankPrefs,
+        ).getOrThrow()
+        assertEquals("Interstellar", details.title)
+        assertTrue(requestedUrls.any { it.contains("/3/find/tt0816692") && it.contains("external_source=imdb_id") })
+        assertTrue(requestedUrls.any { it.contains("/3/movie/157336") })
     }
 }

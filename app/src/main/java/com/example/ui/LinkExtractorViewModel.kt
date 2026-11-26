@@ -92,7 +92,8 @@ sealed interface UpdateCheckState {
 data class LinkExtractorScreenState(
     val language: AppLanguage = AppLanguage.EN,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    val destination: AppDestination = AppDestination.HOME,
+    val useSeparateTabs: Boolean = false,
+    val destination: AppDestination = AppDestination.DISCOVER,
     val downloadFilter: DownloadFilter = DownloadFilter.ALL,
     val inputText: String = "",
     val uiState: ExtractorUiState = ExtractorUiState.Idle,
@@ -125,14 +126,38 @@ class LinkExtractorViewModel(
         vlcInstalled: Boolean,
         developerMode: Boolean,
         themeMode: ThemeMode = ThemeMode.SYSTEM,
+        useSeparateTabs: Boolean = false,
     ) {
         _screenState.update {
+            val nextDest = if (useSeparateTabs && it.destination == AppDestination.DISCOVER) {
+                AppDestination.HOME
+            } else if (!useSeparateTabs && (it.destination == AppDestination.HOME || it.destination == AppDestination.RESOLVER)) {
+                AppDestination.DISCOVER
+            } else {
+                it.destination
+            }
             it.copy(
                 language = language,
                 themeMode = themeMode,
+                useSeparateTabs = useSeparateTabs,
+                destination = nextDest,
                 isVlcInterceptorEnabled = vlcEnabled,
                 isVlcInstalled = vlcInstalled,
                 isDeveloperMode = developerMode,
+            )
+        }
+    }
+
+    fun setUseSeparateTabs(enabled: Boolean) {
+        _screenState.update {
+            val nextDest = if (!enabled && (it.destination == AppDestination.HOME || it.destination == AppDestination.RESOLVER)) {
+                AppDestination.DISCOVER
+            } else {
+                it.destination
+            }
+            it.copy(
+                useSeparateTabs = enabled,
+                destination = nextDest,
             )
         }
     }
@@ -152,7 +177,7 @@ class LinkExtractorViewModel(
         val url = _screenState.value.detectedClipboardUrl ?: return
         _screenState.update {
             it.copy(
-                destination = AppDestination.RESOLVER,
+                destination = if (it.useSeparateTabs) AppDestination.RESOLVER else AppDestination.DISCOVER,
                 inputText = url,
                 detectedClipboardUrl = null,
                 capturedFromExternalIntent = false,
@@ -179,7 +204,16 @@ class LinkExtractorViewModel(
     }
 
     fun navigateTo(destination: AppDestination) {
-        _screenState.update { it.copy(destination = destination) }
+        _screenState.update {
+            val resolvedDest = if (!it.useSeparateTabs &&
+                (destination == AppDestination.HOME || destination == AppDestination.RESOLVER)
+            ) {
+                AppDestination.DISCOVER
+            } else {
+                destination
+            }
+            it.copy(destination = resolvedDest)
+        }
     }
 
     fun submitLinkFromHome(rawInput: String) {
@@ -190,7 +224,7 @@ class LinkExtractorViewModel(
         }
         _screenState.update {
             it.copy(
-                destination = AppDestination.RESOLVER,
+                destination = if (it.useSeparateTabs) AppDestination.RESOLVER else AppDestination.DISCOVER,
                 inputText = normalized,
                 detectedClipboardUrl = null,
                 capturedFromExternalIntent = false,
@@ -246,7 +280,7 @@ class LinkExtractorViewModel(
     fun handleIncomingExternalUrl(url: String) {
         _screenState.update {
             it.copy(
-                destination = AppDestination.RESOLVER,
+                destination = if (it.useSeparateTabs) AppDestination.RESOLVER else AppDestination.DISCOVER,
                 inputText = url,
                 detectedClipboardUrl = null,
                 capturedFromExternalIntent = true,
@@ -260,6 +294,17 @@ class LinkExtractorViewModel(
             it.copy(
                 inputText = newText,
                 capturedFromExternalIntent = false,
+            )
+        }
+    }
+
+    fun dismissInlineResolverResult() {
+        activeJob?.cancel()
+        _screenState.update {
+            it.copy(
+                capturedFromExternalIntent = false,
+                uiState = ExtractorUiState.Idle,
+                pendingXResult = null,
             )
         }
     }

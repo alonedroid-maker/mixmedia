@@ -166,6 +166,10 @@ fun MediaXApp(
         viewModel.setYouTubeApiKey(discoveryState.preferences.youtubeApiKey)
     }
 
+    LaunchedEffect(discoveryState.preferences.useSeparateTabs) {
+        viewModel.setUseSeparateTabs(discoveryState.preferences.useSeparateTabs)
+    }
+
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = { /* Download continues regardless; notification shown if granted */ },
@@ -344,9 +348,12 @@ fun MediaXApp(
     }
 
     fun sendUrlToResolver(url: String) {
+        if (!state.useSeparateTabs) {
+            discoveryViewModel.resetToHome()
+        }
         viewModel.onInputChanged(url)
         viewModel.navigateTo(AppDestination.RESOLVER)
-        viewModel.executeExtraction()
+        viewModel.executeExtraction(youtubeApiKey = discoveryState.preferences.youtubeApiKey)
     }
 
     fun toggleVlcInterceptor(enabled: Boolean) {
@@ -355,14 +362,15 @@ fun MediaXApp(
         showMessage(if (enabled) strings.msgVlcEnabled else strings.msgVlcDisabled)
     }
 
+    val rootDestination = if (state.useSeparateTabs) AppDestination.HOME else AppDestination.DISCOVER
     val isInsideSubRoute = state.destination == AppDestination.DISCOVER && discoveryState.canPopRoute
     if (isInsideSubRoute && discoveryState.currentRoute !is DiscoveryRoute.Browser) {
         BackHandler {
             discoveryViewModel.popRoute()
         }
-    } else if (state.destination != AppDestination.HOME && !isInsideSubRoute) {
+    } else if (state.destination != rootDestination && !isInsideSubRoute) {
         BackHandler {
-            viewModel.navigateTo(AppDestination.HOME)
+            viewModel.navigateTo(rootDestination)
         }
     }
 
@@ -383,22 +391,24 @@ fun MediaXApp(
                             windowInsets = WindowInsets.navigationBars,
                             containerColor = MaterialTheme.colorScheme.surface,
                         ) {
-                            NavigationBarItem(
-                                selected = state.destination == AppDestination.HOME,
-                                onClick = { viewModel.navigateTo(AppDestination.HOME) },
-                                icon = {
-                                    Icon(
-                                        imageVector = if (state.destination == AppDestination.HOME) {
-                                            Icons.Rounded.Home
-                                        } else {
-                                            Icons.Outlined.Home
-                                        },
-                                        contentDescription = strings.ui.navHome,
-                                    )
-                                },
-                                label = { Text(strings.ui.navHome, maxLines = 1) },
-                                modifier = Modifier.testTag("nav_home"),
-                            )
+                            if (state.useSeparateTabs) {
+                                NavigationBarItem(
+                                    selected = state.destination == AppDestination.HOME,
+                                    onClick = { viewModel.navigateTo(AppDestination.HOME) },
+                                    icon = {
+                                        Icon(
+                                            imageVector = if (state.destination == AppDestination.HOME) {
+                                                Icons.Rounded.Home
+                                            } else {
+                                                Icons.Outlined.Home
+                                            },
+                                            contentDescription = strings.ui.navHome,
+                                        )
+                                    },
+                                    label = { Text(strings.ui.navHome, maxLines = 1) },
+                                    modifier = Modifier.testTag("nav_home"),
+                                )
+                            }
                             NavigationBarItem(
                                 selected = state.destination == AppDestination.DISCOVER,
                                 onClick = {
@@ -421,22 +431,24 @@ fun MediaXApp(
                                 label = { Text(strings.navDiscover, maxLines = 1) },
                                 modifier = Modifier.testTag("nav_discover"),
                             )
-                            NavigationBarItem(
-                                selected = state.destination == AppDestination.RESOLVER,
-                                onClick = { viewModel.navigateTo(AppDestination.RESOLVER) },
-                                icon = {
-                                    Icon(
-                                        imageVector = if (state.destination == AppDestination.RESOLVER) {
-                                            Icons.Rounded.Link
-                                        } else {
-                                            Icons.Outlined.Link
-                                        },
-                                        contentDescription = strings.navResolver,
-                                    )
-                                },
-                                label = { Text(strings.navResolver, maxLines = 1) },
-                                modifier = Modifier.testTag("nav_resolver"),
-                            )
+                            if (state.useSeparateTabs) {
+                                NavigationBarItem(
+                                    selected = state.destination == AppDestination.RESOLVER,
+                                    onClick = { viewModel.navigateTo(AppDestination.RESOLVER) },
+                                    icon = {
+                                        Icon(
+                                            imageVector = if (state.destination == AppDestination.RESOLVER) {
+                                                Icons.Rounded.Link
+                                            } else {
+                                                Icons.Outlined.Link
+                                            },
+                                            contentDescription = strings.navResolver,
+                                        )
+                                    },
+                                    label = { Text(strings.navResolver, maxLines = 1) },
+                                    modifier = Modifier.testTag("nav_resolver"),
+                                )
+                            }
                             NavigationBarItem(
                                 selected = state.destination == AppDestination.DOWNLOADS,
                                 onClick = { viewModel.navigateTo(AppDestination.DOWNLOADS) },
@@ -498,12 +510,14 @@ fun MediaXApp(
                             containerColor = MaterialTheme.colorScheme.surface,
                         ) {
                             Spacer(modifier = Modifier.height(12.dp))
-                            NavigationRailItem(
-                                selected = state.destination == AppDestination.HOME,
-                                onClick = { viewModel.navigateTo(AppDestination.HOME) },
-                                icon = { Icon(Icons.Rounded.Home, contentDescription = strings.ui.navHome) },
-                                label = { Text(strings.ui.navHome) },
-                            )
+                            if (state.useSeparateTabs) {
+                                NavigationRailItem(
+                                    selected = state.destination == AppDestination.HOME,
+                                    onClick = { viewModel.navigateTo(AppDestination.HOME) },
+                                    icon = { Icon(Icons.Rounded.Home, contentDescription = strings.ui.navHome) },
+                                    label = { Text(strings.ui.navHome) },
+                                )
+                            }
                             NavigationRailItem(
                                 selected = state.destination == AppDestination.DISCOVER,
                                 onClick = {
@@ -516,12 +530,14 @@ fun MediaXApp(
                                 icon = { Icon(Icons.Rounded.Movie, contentDescription = strings.navDiscover) },
                                 label = { Text(strings.navDiscover) },
                             )
-                            NavigationRailItem(
-                                selected = state.destination == AppDestination.RESOLVER,
-                                onClick = { viewModel.navigateTo(AppDestination.RESOLVER) },
-                                icon = { Icon(Icons.Rounded.Link, contentDescription = strings.navResolver) },
-                                label = { Text(strings.navResolver) },
-                            )
+                            if (state.useSeparateTabs) {
+                                NavigationRailItem(
+                                    selected = state.destination == AppDestination.RESOLVER,
+                                    onClick = { viewModel.navigateTo(AppDestination.RESOLVER) },
+                                    icon = { Icon(Icons.Rounded.Link, contentDescription = strings.navResolver) },
+                                    label = { Text(strings.navResolver) },
+                                )
+                            }
                             NavigationRailItem(
                                 selected = state.destination == AppDestination.DOWNLOADS,
                                 onClick = { viewModel.navigateTo(AppDestination.DOWNLOADS) },
@@ -658,6 +674,29 @@ fun MediaXApp(
                                         onUpdateDiscoverFilters = discoveryViewModel::updateDiscoverFilters,
                                         onClearDiscoverFilters = discoveryViewModel::clearDiscoverFilters,
                                         onLoadMore = discoveryViewModel::loadNextSearchPage,
+                                        extractorState = state,
+                                        activeDownloadCount = activeDownloadCount,
+                                        onExtractorInputChanged = viewModel::onInputChanged,
+                                        onResolveLink = { normalized -> viewModel.submitLinkFromHome(normalized) },
+                                        onClearExtractor = viewModel::onClearInput,
+                                        onCancelExtraction = viewModel::onCancelExecution,
+                                        onDismissInlineResult = viewModel::dismissInlineResolverResult,
+                                        onToggleLogExpanded = viewModel::onToggleLogExpanded,
+                                        onSelectHistoryItem = viewModel::onSelectHistoryItem,
+                                        onAcceptClipboardUrl = viewModel::acceptDetectedClipboardUrl,
+                                        onDismissClipboardUrl = viewModel::dismissDetectedClipboardUrl,
+                                        onDownloadInApp = ::startDownloadFromResolver,
+                                        onDownloadAuthorizedUrl = { url, suggestedName ->
+                                            requestDownloadWithConflictCheck(
+                                                url = url,
+                                                sourcePlayUrl = (state.uiState as? ExtractorUiState.Success)?.result?.sourceUrl,
+                                                suggestedFileName = suggestedName,
+                                                fromResolver = true,
+                                            )
+                                        },
+                                        onOpenXQualityPicker = viewModel::openXQualityPicker,
+                                        onOpenDownloads = { viewModel.navigateTo(AppDestination.DOWNLOADS) },
+                                        onShowMessage = ::showMessage,
                                     )
                                 }
 
@@ -867,6 +906,10 @@ fun MediaXApp(
                                 onShowMessage = ::showMessage,
                                 onUpdateTmdbProxyUrl = discoveryViewModel::updateTmdbProxyUrl,
                                 onTestTmdbBackend = discoveryViewModel::testTmdbBackendConnection,
+                                onToggleUseSeparateTabs = { enabled ->
+                                    discoveryViewModel.updatePreferences { it.copy(useSeparateTabs = enabled) }
+                                    viewModel.setUseSeparateTabs(enabled)
+                                },
                             )
                         }
                     }
@@ -930,6 +973,8 @@ fun MediaXApp(
             }
 
             pendingConflictRequest?.let { req ->
+                val isResolverContext = state.destination == AppDestination.RESOLVER ||
+                    (!state.useSeparateTabs && state.destination == AppDestination.DISCOVER)
                 FileConflictDialog(
                     request = req,
                     strings = strings,
@@ -943,7 +988,7 @@ fun MediaXApp(
                             overwriteExisting = false,
                             customUserAgent = req.customUserAgent,
                         )
-                        showQueuedFeedback(fromResolver = state.destination == AppDestination.RESOLVER)
+                        showQueuedFeedback(fromResolver = isResolverContext)
                     },
                     onOverwrite = {
                         pendingConflictRequest = null
@@ -955,7 +1000,7 @@ fun MediaXApp(
                             overwriteExisting = true,
                             customUserAgent = req.customUserAgent,
                         )
-                        showQueuedFeedback(fromResolver = state.destination == AppDestination.RESOLVER)
+                        showQueuedFeedback(fromResolver = isResolverContext)
                     },
                     onDismiss = { pendingConflictRequest = null },
                 )

@@ -387,23 +387,24 @@ class XTwitterExtractorTest {
             )
             val vm = LinkExtractorViewModel(resolver = resolver)
 
-            // 1. Validate photo-only X URL produces honest X_NO_VIDEO inside Resolver
+            // 1. Validate photo-only X URL produces honest X_NO_VIDEO inside unified DISCOVER hub by default
             vm.submitLinkFromHome("https://x.com/photouser/status/999000111")
             advanceUntilIdle()
-            assertEquals(AppDestination.RESOLVER, vm.screenState.value.destination)
+            assertEquals(AppDestination.DISCOVER, vm.screenState.value.destination)
             assertEquals(
                 ErrorType.X_NO_VIDEO,
                 (vm.screenState.value.uiState as ExtractorUiState.Error).errorType,
             )
 
-            // 2. Validate schemeless X link submitted from Home normalizes and resolves
+            // 2. Validate schemeless X link submitted from unified bar normalizes and resolves
             vm.submitLinkFromHome("x.com/testx/status/1823456789012345678")
             advanceUntilIdle()
-            assertEquals(AppDestination.RESOLVER, vm.screenState.value.destination)
+            assertEquals(AppDestination.DISCOVER, vm.screenState.value.destination)
             val homeSuccess = vm.screenState.value.uiState as ExtractorUiState.Success
             assertEquals(2, homeSuccess.result.xVideoVariants.size)
 
-            // 3. Simulate Android Share Intent from X app routing into Resolver
+            // 3. Simulate Android Share Intent from X app routing into RESOLVER when classic tabs are enabled
+            vm.setUseSeparateTabs(true)
             vm.handleIncomingExternalUrl("https://x.com/testx/status/1823456789012345678?s=20")
             advanceUntilIdle()
 

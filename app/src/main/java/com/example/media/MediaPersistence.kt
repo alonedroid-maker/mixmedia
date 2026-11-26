@@ -34,6 +34,7 @@ class MediaPersistence(context: Context) {
             watchRegion = WatchRegions.normalize(prefs.getString(KEY_WATCH_REGION, "US")),
             trendingWindow = TrendingTimeWindow.fromApi(prefs.getString(KEY_TRENDING_WINDOW, null)),
             tmdbProxyUrl = prefs.getString(KEY_TMDB_PROXY_URL, "") ?: "",
+            useSeparateTabs = prefs.getBoolean(KEY_USE_SEPARATE_TABS, false),
         )
     }
 
@@ -49,6 +50,7 @@ class MediaPersistence(context: Context) {
             .putString(KEY_WATCH_REGION, WatchRegions.normalize(preferences.watchRegion))
             .putString(KEY_TRENDING_WINDOW, preferences.trendingWindow.apiValue)
             .putString(KEY_TMDB_PROXY_URL, preferences.tmdbProxyUrl.trim())
+            .putBoolean(KEY_USE_SEPARATE_TABS, preferences.useSeparateTabs)
             .apply()
     }
 
@@ -433,6 +435,7 @@ class MediaPersistence(context: Context) {
         private const val KEY_WATCH_REGION = "watch_region"
         private const val KEY_TRENDING_WINDOW = "trending_window"
         private const val KEY_TMDB_PROXY_URL = "tmdb_proxy_url"
+        private const val KEY_USE_SEPARATE_TABS = "use_separate_tabs"
         private const val MAX_SAVED_ITEMS = 50
         private const val MAX_HISTORY_ITEMS = 15
 
