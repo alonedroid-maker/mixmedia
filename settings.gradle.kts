@@ -24,4 +24,9 @@ dependencyResolutionManagement {
 
 rootProject.name = "MediaX"
 
-include(":app", ":core", ":desktop", ":web")
+val webOnly = providers.gradleProperty("webOnly").orNull.equals("true", ignoreCase = true)
+if (webOnly) {
+  include(":core", ":web")
+} else {
+  include(":app", ":core", ":desktop", ":web")
+}

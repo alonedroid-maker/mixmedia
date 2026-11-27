@@ -1,0 +1,13 @@
+.git/
+.gradle/
+.aistudio/
+.build-outputs/
+**/build/
+.env
+*.jks
+*.keystore
+debug.keystore.base64
+local.properties
+app/
+desktop/
+cloudflare-worker/
