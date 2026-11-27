@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en" dir="ltr" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d10">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="MediaX">
+  <meta name="description" content="MediaX Web App — Movie & TV Discovery, Source Finder, and Direct Link Resolver for iOS, Android, macOS, and Windows.">
+  <title>MediaX</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <aside id="side-rail" class="side-rail" aria-label="Primary Navigation">
+      <div class="brand-lockup">
+        <img src="/icon-192.png" alt="MediaX" class="brand-icon">
+        <div>
+          <div class="brand-title">MediaX</div>
+          <div id="version-badge" class="brand-sub">Web PWA</div>
+        </div>
+      </div>
+      <nav id="rail-nav" class="rail-nav"></nav>
+      <div class="rail-footer">
+        <button id="quick-lang-btn" type="button" class="pill-btn"></button>
+        <button id="quick-theme-btn" type="button" class="pill-btn"></button>
+      </div>
+    </aside>
+
+    <div class="main-column">
+      <header class="top-bar">
+        <div class="top-brand-mobile">
+          <img src="/icon-192.png" alt="MediaX" class="brand-icon-sm">
+          <span class="brand-title-sm">MediaX</span>
+        </div>
+        <div id="top-title" class="top-title"></div>
+        <div class="top-actions">
+          <button id="mobile-lang-btn" type="button" class="chip-btn"></button>
+          <button id="mobile-theme-btn" type="button" class="chip-btn"></button>
+        </div>
+      </header>
+
+      <div id="ios-install-banner" class="ios-banner hidden">
+        <div id="ios-install-text" class="ios-banner-text"></div>
+        <button id="ios-install-close" type="button" class="chip-btn" aria-label="Close">×</button>
+      </div>
+
+      <main id="main-content" class="main-content"></main>
+
+      <nav id="bottom-nav" class="bottom-nav" aria-label="Bottom Navigation"></nav>
+    </div>
+  </div>
+
+  <div id="modal-backdrop" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div id="modal-sheet" class="modal-sheet"></div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

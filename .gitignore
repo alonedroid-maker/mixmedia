@@ -21,5 +21,7 @@ desktop/build/
 desktop/installer/windows/dist-stage/
 desktop/installer/windows/resource.res
 desktop/installer/windows/version_generated.h
+web/build/
 release-output-windows/
+release-output-web/
 release-output/

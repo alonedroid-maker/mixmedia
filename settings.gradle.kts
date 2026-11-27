@@ -24,4 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "MediaX"
 
-include(":app", ":core", ":desktop")
+include(":app", ":core", ":desktop", ":web")
