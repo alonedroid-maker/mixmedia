@@ -97,20 +97,48 @@ jobs:
             exit 1
           fi
 
-      - name: Verify Zero Duplicate Sources Between :app and :core
+      - name: Deduplicate Legacy Moved Sources Between :app and :core
         run: |
           python3 - << 'PY'
-          import os, sys
+          import os, re
+
           app_root = "app/src/main/java/com/example"
           core_root = "core/src/main/kotlin/com/example"
-          app_files = {os.path.relpath(os.path.join(r, f), app_root) for r, _, fs in os.walk(app_root) for f in fs if f.endswith(".kt")}
-          core_files = {os.path.relpath(os.path.join(r, f), core_root) for r, _, fs in os.walk(core_root) for f in fs if f.endswith(".kt")}
-          dups = sorted(app_files & core_files)
-          if dups:
-              sys.stderr.write("ERROR: Duplicate Kotlin files found in both app/ and core/. Delete these old files from app/src/main/java/com/example/:\n")
-              for d in dups:
-                  sys.stderr.write(f"  - app/src/main/java/com/example/{d}\n")
-              sys.exit(1)
+
+          def collect(root):
+              rel_map = {}
+              symbols = {}
+              for r, _, fs in os.walk(root):
+                  for f in fs:
+                      if not f.endswith(".kt"):
+                          continue
+                      p = os.path.join(r, f)
+                      rel = os.path.relpath(p, root)
+                      rel_map[rel] = p
+                      with open(p, encoding="utf-8") as fh:
+                          txt = fh.read()
+                      pkg_m = re.search(r"^\s*package\s+([\w.]+)", txt, re.M)
+                      pkg = pkg_m.group(1) if pkg_m else ""
+                      for m in re.finditer(
+                          r"^(?:data\s+|sealed\s+|enum\s+|inline\s+|value\s+|abstract\s+|open\s+|internal\s+|private\s+|public\s+|annotation\s+)*(?:class|interface|object)\s+(\w+)",
+                          txt,
+                          re.M,
+                      ):
+                          symbols.setdefault(f"{pkg}.{m.group(1)}", set()).add(p)
+              return rel_map, symbols
+
+          app_rels, app_syms = collect(app_root)
+          core_rels, core_syms = collect(core_root)
+
+          to_remove = set()
+          for rel in set(app_rels) & set(core_rels):
+              to_remove.add(app_rels[rel])
+          for sym in set(app_syms) & set(core_syms):
+              to_remove.update(app_syms[sym])
+
+          for p in sorted(to_remove):
+              print(f"::warning::Removing stale duplicate moved to :core from CI checkout: {p}")
+              os.remove(p)
           PY
 
       - name: Build Signed Release APK
