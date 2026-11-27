@@ -1,11 +1,15 @@
 #include <winver.h>
 
+#ifdef USE_GENERATED_VERSION_HEADER
+#include "version_generated.h"
+#endif
+
 #ifndef APP_VER_CSV
-#define APP_VER_CSV 1,0,0,0
+#define APP_VER_CSV 2,0,0,6
 #endif
 
 #ifndef APP_VER_STR
-#define APP_VER_STR "1.0.0"
+#define APP_VER_STR "2.0"
 #endif
 
 1 ICON "mediax.ico"

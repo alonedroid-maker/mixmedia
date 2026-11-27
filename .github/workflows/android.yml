@@ -97,6 +97,22 @@ jobs:
             exit 1
           fi
 
+      - name: Verify Zero Duplicate Sources Between :app and :core
+        run: |
+          python3 - << 'PY'
+          import os, sys
+          app_root = "app/src/main/java/com/example"
+          core_root = "core/src/main/kotlin/com/example"
+          app_files = {os.path.relpath(os.path.join(r, f), app_root) for r, _, fs in os.walk(app_root) for f in fs if f.endswith(".kt")}
+          core_files = {os.path.relpath(os.path.join(r, f), core_root) for r, _, fs in os.walk(core_root) for f in fs if f.endswith(".kt")}
+          dups = sorted(app_files & core_files)
+          if dups:
+              sys.stderr.write("ERROR: Duplicate Kotlin files found in both app/ and core/. Delete these old files from app/src/main/java/com/example/:\n")
+              for d in dups:
+                  sys.stderr.write(f"  - app/src/main/java/com/example/{d}\n")
+              sys.exit(1)
+          PY
+
       - name: Build Signed Release APK
         env:
           KEYSTORE_PATH: ${{ runner.temp }}/mediax-release.jks

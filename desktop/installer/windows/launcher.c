@@ -31,14 +31,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     }
 
     wchar_t appDir[MAX_PATH];
-    wcscpy_s(appDir, MAX_PATH, exePath);
+    wcsncpy(appDir, exePath, MAX_PATH - 1);
+    appDir[MAX_PATH - 1] = L'\0';
     wchar_t* lastSlash = wcsrchr(appDir, L'\\');
     if (lastSlash != NULL) {
         *lastSlash = L'\0';
     }
 
     wchar_t javawPath[MAX_PATH];
-    swprintf_s(javawPath, MAX_PATH, L"%ls\\runtime\\bin\\javaw.exe", appDir);
+    swprintf(javawPath, MAX_PATH, L"%ls\\runtime\\bin\\javaw.exe", appDir);
     if (GetFileAttributesW(javawPath) == INVALID_FILE_ATTRIBUTES) {
         ShowErrorBox(L"Bundled Java 11 runtime was not found (runtime\\bin\\javaw.exe). Please reinstall MediaX.");
         return 2;
@@ -46,7 +47,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
     wchar_t cmdLine[8192];
     const wchar_t* extraArgs = (pCmdLine != NULL && pCmdLine[0] != L'\0') ? pCmdLine : L"";
-    swprintf_s(
+    swprintf(
         cmdLine,
         8192,
         L"\"%ls\" -Xms64m -Xmx768m -Dfile.encoding=UTF-8 -Djdk.tls.client.protocols=TLSv1.2,TLSv1.3 "

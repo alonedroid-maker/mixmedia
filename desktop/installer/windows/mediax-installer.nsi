@@ -2,6 +2,7 @@ Unicode True
 ManifestSupportedOS all
 
 !include "MUI2.nsh"
+!include "LogicLib.nsh"
 
 !ifndef APP_VERSION
   !define APP_VERSION "1.0.0"
@@ -60,7 +61,7 @@ FunctionEnd
 
 Section "Install"
   SetOutPath "$INSTDIR"
-  File /r "${STAGE_DIR}\*.*"
+  File /r "${STAGE_DIR}\*"
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 

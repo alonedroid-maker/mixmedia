@@ -64,6 +64,13 @@ jobs:
           "$releaseNotes" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "EOF_RELEASE_NOTES" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+      - name: Setup Corretto 11 (for Windows 7 SP1+ jlink Runtime)
+        id: java11
+        uses: actions/setup-java@v4
+        with:
+          distribution: corretto
+          java-version: '11'
+
       - name: Setup Java 17 (for Gradle Build)
         uses: actions/setup-java@v4
         with:
@@ -93,21 +100,17 @@ jobs:
           gradle --no-daemon :core:test :desktop:test :desktop:packageDesktopLibs --max-workers=1
           if ($LASTEXITCODE -ne 0) { throw "Gradle build/test failed with exit code $LASTEXITCODE" }
 
-      - name: Download Amazon Corretto 11 JDK (Windows 7 SP1 - 11+ Runtime)
-        run: |
-          $jdkZip = Join-Path $env:RUNNER_TEMP "corretto11.zip"
-          $jdkExtract = Join-Path $env:RUNNER_TEMP "corretto11"
-          Invoke-WebRequest -Uri "https://corretto.aws/downloads/latest/amazon-corretto-11-x64-windows-jdk.zip" -OutFile $jdkZip
-          Expand-Archive -Path $jdkZip -DestinationPath $jdkExtract -Force
-          $jdkHome = (Get-ChildItem -Path $jdkExtract -Directory | Select-Object -First 1).FullName
-          "CORRETTO11_HOME=$jdkHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
       - name: Assemble Slim Windows 7+ Java 11 Runtime & Compile MediaX.exe Launcher
         env:
+          CORRETTO11_HOME: ${{ steps.java11.outputs.path }}
           VERSION_NAME: ${{ steps.release_info.outputs.version_name }}
           VERSION_CSV: ${{ steps.release_info.outputs.version_csv }}
         run: |
-          $stageDir = Join-Path $PWD "desktop/build/win-stage"
+          if ([string]::IsNullOrWhiteSpace($env:CORRETTO11_HOME) -or -not (Test-Path $env:CORRETTO11_HOME)) {
+            throw "CORRETTO11_HOME not found: '$($env:CORRETTO11_HOME)'"
+          }
+
+          $stageDir = [System.IO.Path]::GetFullPath((Join-Path $PWD "desktop/build/win-stage"))
           if (Test-Path $stageDir) { Remove-Item -Recurse -Force $stageDir }
           New-Item -ItemType Directory -Path $stageDir | Out-Null
 
@@ -124,7 +127,7 @@ jobs:
             --no-man-pages `
             --compress=2 `
             --output (Join-Path $stageDir "runtime")
-          if ($LASTEXITCODE -ne 0) { throw "jlink failed" }
+          if ($LASTEXITCODE -ne 0) { throw "jlink failed with exit code $LASTEXITCODE" }
 
           # Bundle Microsoft CRT/UCRT runtime DLLs alongside runtime\bin for clean Windows 7 SP1 systems
           $rtBin = Join-Path $stageDir "runtime\bin"
@@ -132,30 +135,54 @@ jobs:
             Where-Object { $_.Name -match '^(vcruntime|msvcp|ucrtbase|api-ms-win-crt).*\.dll$' } |
             ForEach-Object { Copy-Item $_.FullName -Destination $rtBin -Force }
 
-          # Ensure MinGW-w64 & NSIS tools are installed
-          $mingwBin = "C:\msys64\mingw64\bin"
-          if (-not (Test-Path (Join-Path $mingwBin "gcc.exe"))) {
+          # Discover or install MinGW-w64 (gcc.exe + windres.exe)
+          function Find-ToolBin($exeName, $candidates) {
+            foreach ($dir in $candidates) {
+              if ($dir -and (Test-Path (Join-Path $dir $exeName))) { return $dir }
+            }
+            $cmd = Get-Command $exeName -ErrorAction SilentlyContinue
+            if ($cmd) { return (Split-Path $cmd.Source -Parent) }
+            return $null
+          }
+
+          $mingwCandidates = @(
+            "C:\msys64\mingw64\bin",
+            "C:\mingw64\bin",
+            "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin",
+            "C:\ProgramData\mingw64\mingw64\bin"
+          )
+          $mingwBin = Find-ToolBin "windres.exe" $mingwCandidates
+          if (-not $mingwBin) {
             choco install mingw -y --no-progress
-            $mingwBin = (Get-Command gcc.exe).Source | Split-Path
+            if ($LASTEXITCODE -ne 0) { throw "choco install mingw failed" }
+            $mingwBin = Find-ToolBin "windres.exe" $mingwCandidates
+          }
+          if (-not $mingwBin -or -not (Test-Path (Join-Path $mingwBin "gcc.exe"))) {
+            throw "MinGW-w64 gcc.exe / windres.exe not found after installation."
           }
           $env:PATH = "$mingwBin;$env:PATH"
 
-          if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue)) {
-            choco install nsis -y --no-progress
-            $env:PATH = "C:\Program Files (x86)\NSIS;$env:PATH"
-          }
-
           # Compile Win32 Resource (icon + Win7..Win11+ app.manifest + version info) and Unicode GUI Launcher
           Push-Location "desktop/installer/windows"
+          $genHeader = Join-Path $PWD "version_generated.h"
           try {
-            & windres.exe resource.rc -O coff "-DAPP_VER_CSV=$VERSION_CSV" "-DAPP_VER_STR=`"$VERSION_NAME`"" -o "$stageDir\resource.res"
-            if ($LASTEXITCODE -ne 0) { throw "windres failed" }
+            $verName = $env:VERSION_NAME
+            $verCsv = $env:VERSION_CSV
+            $safeVer = $verName.Replace('"', '\"')
+            @(
+              "#define APP_VER_CSV $verCsv",
+              "#define APP_VER_STR `"$safeVer`""
+            ) | Out-File -FilePath $genHeader -Encoding ascii
+
+            & windres.exe resource.rc -O coff -DUSE_GENERATED_VERSION_HEADER -o "$stageDir\resource.res"
+            if ($LASTEXITCODE -ne 0) { throw "windres failed with exit code $LASTEXITCODE" }
 
             & gcc.exe -O2 -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0601 -mwindows -municode -static `
               launcher.c "$stageDir\resource.res" -o "$stageDir\MediaX.exe" -luser32 -lkernel32
-            if ($LASTEXITCODE -ne 0) { throw "gcc launcher build failed" }
-            Remove-Item "$stageDir\resource.res" -Force
+            if ($LASTEXITCODE -ne 0) { throw "gcc launcher build failed with exit code $LASTEXITCODE" }
+            Remove-Item "$stageDir\resource.res" -Force -ErrorAction SilentlyContinue
           } finally {
+            Remove-Item $genHeader -Force -ErrorAction SilentlyContinue
             Pop-Location
           }
 
@@ -163,18 +190,35 @@ jobs:
         env:
           VERSION_NAME: ${{ steps.release_info.outputs.version_name }}
         run: |
-          $env:PATH = "C:\Program Files (x86)\NSIS;C:\Program Files\NSIS;$env:PATH"
-          $outDir = Join-Path $PWD "release-output-windows"
+          $nsisCandidates = @(
+            "C:\Program Files (x86)\NSIS",
+            "C:\Program Files\NSIS"
+          )
+          $nsisBin = $nsisCandidates | Where-Object { Test-Path (Join-Path $_ "makensis.exe") } | Select-Object -First 1
+          if (-not $nsisBin) {
+            $cmd = Get-Command makensis.exe -ErrorAction SilentlyContinue
+            if ($cmd) { $nsisBin = Split-Path $cmd.Source -Parent }
+          }
+          if (-not $nsisBin) {
+            choco install nsis -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed" }
+            $nsisBin = $nsisCandidates | Where-Object { Test-Path (Join-Path $_ "makensis.exe") } | Select-Object -First 1
+          }
+          if (-not $nsisBin) { throw "makensis.exe not found after NSIS installation." }
+          $env:PATH = "$nsisBin;$env:PATH"
+
+          $outDir = [System.IO.Path]::GetFullPath((Join-Path $PWD "release-output-windows"))
           New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 
-          $setupExe = Join-Path $outDir "MediaX-v${VERSION_NAME}-Windows-x64-Setup.exe"
-          $portableZip = Join-Path $outDir "MediaX-v${VERSION_NAME}-Windows-x64-Portable.zip"
-          $stageDir = Join-Path $PWD "desktop/build/win-stage"
+          $verName = $env:VERSION_NAME
+          $setupExe = Join-Path $outDir "MediaX-v${verName}-Windows-x64-Setup.exe"
+          $portableZip = Join-Path $outDir "MediaX-v${verName}-Windows-x64-Portable.zip"
+          $stageDir = [System.IO.Path]::GetFullPath((Join-Path $PWD "desktop/build/win-stage"))
 
           Push-Location "desktop/installer/windows"
           try {
-            & makensis.exe "/DAPP_VERSION=$VERSION_NAME" "/DSTAGE_DIR=$stageDir" "/DOUT_FILE=$setupExe" mediax-installer.nsi
-            if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+            & makensis.exe "/DAPP_VERSION=$verName" "/DSTAGE_DIR=$stageDir" "/DOUT_FILE=$setupExe" mediax-installer.nsi
+            if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
           } finally {
             Pop-Location
           }
