@@ -26,6 +26,15 @@ data class RedirectHop(
     val contentLength: Long?,
 )
 
+data class DownloadCandidateOption(
+    val url: String,
+    val fileName: String,
+    val extension: String? = null,
+    val label: String? = null,
+    val qualityLabel: String? = null,
+    val fileSizeFormatted: String? = null,
+)
+
 data class CurlResolutionResult(
     val sourceUrl: String,
     val directVideoUrl: String?,
@@ -43,6 +52,7 @@ data class CurlResolutionResult(
     val customUserAgent: String? = null,
     val xVideoVariants: List<XVideoVariant> = emptyList(),
     val thumbnailUrl: String? = null,
+    val downloadOptions: List<DownloadCandidateOption> = emptyList(),
 )
 
 class CurlRedirectResolver(
@@ -63,8 +73,12 @@ class CurlRedirectResolver(
 
     companion object {
         private const val MAX_REDIRECTS = 15
-        private const val MAX_TEXT_BODY_BYTES = 256L * 1024L
+        private const val MAX_TEXT_BODY_BYTES = 1536L * 1024L
         private const val CURL_USER_AGENT = "curl/8.19.0"
+        private val HTML_TITLE_REGEX = Regex(
+            """<title[^>]*>(.*?)</title>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        )
 
         private val DOWNLOADABLE_MIME_EXACT = setOf(
             "application/octet-stream",
@@ -155,6 +169,15 @@ class CurlRedirectResolver(
                 hops = ig.hops,
                 verboseLog = ig.verboseLog,
                 customUserAgent = ig.userAgent,
+                downloadOptions = listOf(
+                    DownloadCandidateOption(
+                        url = directUrl,
+                        fileName = ig.title?.takeIf { it.isNotBlank() } ?: VideoLinkExtractor.extractFilename(directUrl),
+                        extension = "MP4",
+                        label = ig.title,
+                        fileSizeFormatted = ig.fileSizeFormatted,
+                    )
+                ),
             )
         }
 
@@ -185,6 +208,16 @@ class CurlRedirectResolver(
                 mediaDurationSeconds = xRes.durationSeconds,
                 xVideoVariants = xRes.variants,
                 thumbnailUrl = xRes.thumbnailUrl,
+                downloadOptions = xRes.variants.map { v ->
+                    DownloadCandidateOption(
+                        url = v.url,
+                        fileName = v.suggestedFileName,
+                        extension = v.container,
+                        label = v.qualityLabel,
+                        qualityLabel = v.qualityLabel,
+                        fileSizeFormatted = v.fileSizeFormatted,
+                    )
+                },
             )
         }
 
@@ -198,12 +231,32 @@ class CurlRedirectResolver(
         val hops = mutableListOf<RedirectHop>()
         val candidateVideoUrls = linkedSetOf<String>()
         val candidateFileUrls = linkedSetOf<String>()
+        val richCandidatesByUrl = linkedMapOf<String, ExtractedLinkCandidate>()
         val visitedUrls = hashSetOf<String>()
         var currentUrl = inputUrl
         var finalStatusCode = 0
         var finalContentType: String? = null
         var finalContentLength: Long? = null
         var finalContentDisposition: String? = null
+        var pageTitle: String? = null
+
+        fun addRichCandidate(candidate: ExtractedLinkCandidate) {
+            val existing = richCandidatesByUrl[candidate.url]
+            if (existing == null || (existing.anchorText.isNullOrBlank() && !candidate.anchorText.isNullOrBlank())) {
+                richCandidatesByUrl[candidate.url] = ExtractedLinkCandidate(
+                    url = candidate.url,
+                    anchorText = candidate.anchorText ?: existing?.anchorText,
+                    qualityLabel = candidate.qualityLabel ?: existing?.qualityLabel,
+                    sizeHint = candidate.sizeHint ?: existing?.sizeHint,
+                    isVideo = candidate.isVideo || (existing?.isVideo == true),
+                )
+            }
+            if (candidate.isVideo) {
+                candidateVideoUrls.add(candidate.url)
+            } else {
+                candidateFileUrls.add(candidate.url)
+            }
+        }
 
         for (hopIndex in 0..MAX_REDIRECTS) {
             currentCoroutineContext().ensureActive()
@@ -383,10 +436,21 @@ class CurlRedirectResolver(
                             ""
                         }
                         if (bodySnippet.isNotBlank()) {
-                            candidateVideoUrls.addAll(VideoLinkExtractor.extractVideoUrlsFromText(bodySnippet))
-                            candidateFileUrls.addAll(
-                                VideoLinkExtractor.extractDownloadableUrlsFromText(bodySnippet, fromHtmlBody = true)
-                            )
+                            if (pageTitle == null && isHtmlResponse(contentType)) {
+                                pageTitle = HTML_TITLE_REGEX.find(bodySnippet)?.groupValues?.getOrNull(1)
+                                    ?.replace(Regex("<[^>]+>"), " ")
+                                    ?.replace("&amp;", "&")
+                                    ?.replace("&nbsp;", " ")
+                                    ?.replace(Regex("\\s+"), " ")
+                                    ?.trim()
+                                    ?.take(120)
+                                    ?.takeIf { it.isNotBlank() }
+                            }
+                            VideoLinkExtractor.extractRichDownloadCandidates(
+                                text = bodySnippet,
+                                baseUrl = currentUrl,
+                                fromHtmlBody = true,
+                            ).forEach(::addRichCandidate)
                         }
                         appendLine("* Connection #$hopIndex to host $host:$port left intact")
                     }
@@ -397,30 +461,75 @@ class CurlRedirectResolver(
             if (!shouldContinue) break
         }
 
-        val allCandidates = if (candidateVideoUrls.isNotEmpty()) {
-            candidateVideoUrls.toList()
-        } else {
-            candidateFileUrls.toList()
+        val combinedUrls = (candidateVideoUrls + candidateFileUrls).distinct().toMutableList()
+        if (combinedUrls.isEmpty() &&
+            finalStatusCode in 200..299 &&
+            isSmartDirectDownloadResponse(finalContentType, finalContentDisposition, currentUrl)
+        ) {
+            combinedUrls.add(currentUrl)
         }
 
-        val directUrl = VideoLinkExtractor.selectBestVideoUrl(allCandidates)
-            ?: if (
-                finalStatusCode in 200..299 &&
-                isSmartDirectDownloadResponse(finalContentType, finalContentDisposition, currentUrl)
-            ) {
-                currentUrl
-            } else {
-                null
-            }
+        val rawOptions = combinedUrls.map { url ->
+            val rich = richCandidatesByUrl[url]
+            val fname = VideoLinkExtractor.extractFilename(
+                url = url,
+                contentDisposition = if (url == currentUrl) finalContentDisposition else null,
+            )
+            val ext = VideoLinkExtractor.extractExtension(url, fname)
+                ?: if (url == currentUrl) guessExtensionFromMime(finalContentType) else null
+            val quality = rich?.qualityLabel ?: VideoLinkExtractor.detectQualityBadge(url, rich?.anchorText)
+            val sizeStr = rich?.sizeHint
+                ?: if (url == currentUrl) VideoLinkExtractor.formatByteSize(finalContentLength) else null
+            DownloadCandidateOption(
+                url = url,
+                fileName = fname,
+                extension = ext,
+                label = rich?.anchorText?.takeIf { !it.equals(fname, ignoreCase = true) },
+                qualityLabel = quality,
+                fileSizeFormatted = sizeStr,
+            )
+        }
 
-        val filename = directUrl?.let {
+        val sortedOptions = rawOptions.withIndex()
+            .sortedWith(
+                compareByDescending<IndexedValue<DownloadCandidateOption>> {
+                    VideoLinkExtractor.qualitySortRank(it.value.qualityLabel, it.value.url)
+                }.thenByDescending {
+                    richCandidatesByUrl.isEmpty() && it.value.url == currentUrl
+                }.thenBy { it.index }
+            )
+            .map { it.value }
+
+        val allCandidates = if (sortedOptions.isNotEmpty()) {
+            sortedOptions.map { it.url }
+        } else {
+            combinedUrls
+        }
+
+        val directUrl = if (richCandidatesByUrl.isNotEmpty()) {
+            sortedOptions.firstOrNull()?.url
+                ?: VideoLinkExtractor.selectBestVideoUrl(allCandidates)
+        } else {
+            VideoLinkExtractor.selectBestVideoUrl(combinedUrls)
+                ?: sortedOptions.firstOrNull()?.url
+        } ?: if (
+            finalStatusCode in 200..299 &&
+            isSmartDirectDownloadResponse(finalContentType, finalContentDisposition, currentUrl)
+        ) {
+            currentUrl
+        } else {
+            null
+        }
+
+        val topOption = sortedOptions.firstOrNull { it.url == directUrl } ?: sortedOptions.firstOrNull()
+        val filename = topOption?.fileName ?: directUrl?.let {
             VideoLinkExtractor.extractFilename(it, finalContentDisposition)
         }
-        val extension = directUrl?.let {
+        val extension = topOption?.extension ?: directUrl?.let {
             VideoLinkExtractor.extractExtension(it, filename)
         } ?: if (directUrl != null) guessExtensionFromMime(finalContentType) else null
 
-        val formattedSize = VideoLinkExtractor.formatByteSize(finalContentLength)
+        val formattedSize = topOption?.fileSizeFormatted ?: VideoLinkExtractor.formatByteSize(finalContentLength)
 
         CurlResolutionResult(
             sourceUrl = inputUrl,
@@ -432,17 +541,36 @@ class CurlRedirectResolver(
             finalStatusCode = finalStatusCode,
             hops = hops,
             verboseLog = logBuilder.toString().trimEnd(),
+            mediaTitle = pageTitle,
+            downloadOptions = sortedOptions,
         )
     }
 
     fun resolveFromRawTrace(rawTrace: String): CurlResolutionResult {
-        val videoCandidates = VideoLinkExtractor.extractVideoUrlsFromText(rawTrace)
-        val candidates = if (videoCandidates.isNotEmpty()) {
-            videoCandidates
+        val rich = VideoLinkExtractor.extractRichDownloadCandidates(rawTrace, fromHtmlBody = false)
+        val candidates = if (rich.isNotEmpty()) {
+            rich.map { it.url }
         } else {
-            VideoLinkExtractor.extractDownloadableUrlsFromText(rawTrace, fromHtmlBody = false)
+            val videoCandidates = VideoLinkExtractor.extractVideoUrlsFromText(rawTrace)
+            if (videoCandidates.isNotEmpty()) {
+                videoCandidates
+            } else {
+                VideoLinkExtractor.extractDownloadableUrlsFromText(rawTrace, fromHtmlBody = false)
+            }
         }
-        val best = VideoLinkExtractor.selectBestVideoUrl(candidates)
+        val best = VideoLinkExtractor.selectBestVideoUrl(candidates) ?: candidates.lastOrNull()
+        val options = candidates.map { url ->
+            val fname = VideoLinkExtractor.extractFilename(url)
+            DownloadCandidateOption(
+                url = url,
+                fileName = fname,
+                extension = VideoLinkExtractor.extractExtension(url, fname),
+                qualityLabel = VideoLinkExtractor.detectQualityBadge(url),
+                fileSizeFormatted = VideoLinkExtractor.extractSizeHint(url),
+            )
+        }.let { list ->
+            if (best != null) list.sortedByDescending { it.url == best } else list
+        }
         val filename = best?.let { VideoLinkExtractor.extractFilename(it) }
         val extension = best?.let { VideoLinkExtractor.extractExtension(it, filename) }
 
@@ -459,6 +587,7 @@ class CurlRedirectResolver(
             finalStatusCode = if (rawTrace.contains("200 OK")) 200 else 0,
             hops = emptyList(),
             verboseLog = rawTrace.trim(),
+            downloadOptions = options,
         )
     }
 

@@ -62,12 +62,12 @@ class DesktopMediaDetailsDialog(
     private var modifiers = QueryModifiers()
 
     private val headerMetaLabel = DesktopTheme.mutedLabel(strings.statusProcessing)
-    private val posterLabel = JLabel("", SwingConstants.CENTER).apply {
-        preferredSize = Dimension(140, 200)
-        minimumSize = Dimension(140, 200)
-        isOpaque = true
-        background = DesktopTheme.palette.surfaceElevated
-    }
+    private val posterPanel = RoundedPosterPanel(
+        posterWidth = 148,
+        posterHeight = 214,
+        mediaTypeBadge = if (summary.mediaType == MediaType.TV) strings.discover.badgeTvShow else strings.discover.badgeMovie,
+        ratingBadge = summary.imdbRating?.let { "★ %.1f".format(it) },
+    )
     private val overviewArea = JTextArea().apply {
         isEditable = false
         lineWrap = true
@@ -113,9 +113,9 @@ class DesktopMediaDetailsDialog(
     }
 
     private fun buildTopSummaryCard(): JPanel {
-        val card = DesktopTheme.styledCard(elevated = false)
+        val card = DesktopTheme.heroCard(paddingV = 16, paddingH = 18)
         card.layout = BorderLayout(16, 10)
-        card.add(posterLabel, BorderLayout.LINE_START)
+        card.add(posterPanel, BorderLayout.LINE_START)
 
         val rightCol = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -238,13 +238,9 @@ class DesktopMediaDetailsDialog(
 
     private fun loadPosterAsync() {
         uiScope.launch {
-            val icon = DesktopPlatformBridge.loadScaledImage(summary.posterUrl, imageCacheDir, 136, 196)
+            val icon = DesktopPlatformBridge.loadScaledImage(summary.posterUrl, imageCacheDir, 160, 230)
             if (icon != null) {
-                posterLabel.icon = icon
-                posterLabel.text = ""
-            } else {
-                posterLabel.text = if (summary.mediaType == MediaType.TV) strings.discover.badgeTvShow else strings.discover.badgeMovie
-                posterLabel.foreground = DesktopTheme.palette.textSecondary
+                posterPanel.setPosterImage(icon.image)
             }
         }
     }
@@ -394,7 +390,7 @@ class DesktopMediaDetailsDialog(
     }
 
     private fun buildSourceResultRow(result: WebSourceResult): JPanel {
-        val row = DesktopTheme.styledCard(elevated = true, paddingV = 10, paddingH = 12)
+        val row = DesktopTheme.styledCard(elevated = true, paddingV = 10, paddingH = 12, hoverable = true)
         row.layout = GridBagLayout()
         val gbc = GridBagConstraints().apply {
             gridx = 0

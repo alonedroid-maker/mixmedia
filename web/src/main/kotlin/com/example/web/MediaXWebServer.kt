@@ -390,7 +390,6 @@ class MediaXWebServer(
                             put("ok", false)
                             put("errorCode", "YOUTUBE_UNAVAILABLE")
                             put("error", e.message ?: "YouTube video unavailable")
-                            put("verboseLog", e.verboseLog)
                         },
                     )
                 } catch (e: UnsupportedPlatformException) {
@@ -401,7 +400,6 @@ class MediaXWebServer(
                             put("ok", false)
                             put("errorCode", "UNSUPPORTED_PLATFORM")
                             put("error", e.message ?: "Unsupported platform")
-                            put("verboseLog", e.verboseLog)
                         },
                     )
                 } catch (e: XExtractionException) {
@@ -412,7 +410,6 @@ class MediaXWebServer(
                             put("ok", false)
                             put("errorCode", "X_${e.error.name}")
                             put("error", e.message ?: "X/Twitter extraction failed")
-                            put("verboseLog", e.verboseLog)
                         },
                     )
                 } catch (e: Exception) {

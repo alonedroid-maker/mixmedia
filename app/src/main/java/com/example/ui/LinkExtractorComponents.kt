@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Tune
@@ -86,6 +87,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.media.FuzzyTitleMatcher
 import com.example.network.CurlResolutionResult
+import com.example.network.DownloadCandidateOption
 import com.example.network.RedirectHop
 import com.example.network.YouTubeMetadataInfo
 import com.example.ui.theme.JetBrainsMonoFamily
@@ -107,6 +109,8 @@ fun DirectLinkResultCard(
     onOpenLink: (String) -> Unit,
     onShareLink: (String) -> Unit,
     onOpenXQualityPicker: (() -> Unit)? = null,
+    onSelectDownloadOption: ((DownloadCandidateOption) -> Unit)? = null,
+    onOpenDownloadOptionsPicker: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val directUrl = result.directVideoUrl ?: return
@@ -323,6 +327,138 @@ fun DirectLinkResultCard(
                         text = strings.ui.actionChangeXQuality(result.xVideoVariants.size),
                         style = MaterialTheme.typography.labelLarge,
                     )
+                }
+            }
+
+            if (result.xVideoVariants.size <= 1 && result.downloadOptions.size > 1) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (onOpenDownloadOptionsPicker != null) {
+                        FilledTonalButton(
+                            onClick = onOpenDownloadOptionsPicker,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("choose_download_option_button"),
+                            shape = MaterialTheme.shapes.medium,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Tune,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = strings.ui.actionChooseDownloadOption(result.downloadOptions.size),
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = strings.ui.downloadOptionsPrompt,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    result.downloadOptions.take(20).forEach { option ->
+                        val isOptionSelected = option.url == directUrl
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(MaterialTheme.shapes.medium)
+                                .clickable { onSelectDownloadOption?.invoke(option) }
+                                .testTag("inline_download_option_${option.fileName}"),
+                            shape = MaterialTheme.shapes.medium,
+                            color = if (isOptionSelected) {
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                            },
+                            border = BorderStroke(
+                                width = if (isOptionSelected) 1.5.dp else 1.dp,
+                                color = if (isOptionSelected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                                },
+                            ),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Icon(
+                                    imageVector = if (isOptionSelected) {
+                                        Icons.Rounded.CheckCircle
+                                    } else {
+                                        Icons.Rounded.RadioButtonUnchecked
+                                    },
+                                    contentDescription = null,
+                                    tint = if (isOptionSelected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        option.qualityLabel?.takeIf { it.isNotBlank() }?.let { q ->
+                                            BadgePill(
+                                                text = q,
+                                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            )
+                                        }
+                                        option.extension?.takeIf { it.isNotBlank() }?.let { ext ->
+                                            BadgePill(
+                                                text = ext,
+                                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                        option.fileSizeFormatted?.takeIf { it.isNotBlank() }?.let { sz ->
+                                            Text(
+                                                text = sz,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.secondary,
+                                            )
+                                        }
+                                    }
+                                    option.label?.takeIf { it.isNotBlank() }?.let { lbl ->
+                                        Text(
+                                            text = lbl,
+                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                                        Text(
+                                            text = option.fileName,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFamily),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

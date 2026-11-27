@@ -115,7 +115,7 @@ class DesktopDownloadsPanel(
     }
 
     private fun buildHeaderCard(): JPanel {
-        val card = DesktopTheme.styledCard(elevated = false)
+        val card = DesktopTheme.heroCard(paddingV = 16, paddingH = 18)
         card.layout = BoxLayout(card, BoxLayout.Y_AXIS)
 
         val topRow = JPanel(BorderLayout(8, 0)).apply { isOpaque = false }
@@ -244,7 +244,7 @@ class DesktopDownloadsPanel(
     }
 
     private fun buildTaskCard(task: DownloadTask): JPanel {
-        val card = DesktopTheme.styledCard(elevated = true, paddingV = 10, paddingH = 12)
+        val card = DesktopTheme.styledCard(elevated = true, paddingV = 12, paddingH = 14, hoverable = true)
         card.layout = BoxLayout(card, BoxLayout.Y_AXIS)
 
         val top = JPanel(BorderLayout(8, 0)).apply { isOpaque = false }
@@ -373,8 +373,13 @@ class DesktopSettingsPanel(
         DesktopTheme.applyOrientation(this, settings.language)
         bodyPanel.removeAll()
 
-        bodyPanel.add(DesktopTheme.sectionTitle(strings.settingsTitle))
-        bodyPanel.add(Box.createVerticalStrut(10))
+        val headerBanner = DesktopTheme.heroCard(paddingV = 14, paddingH = 18).apply {
+            layout = BorderLayout()
+            add(DesktopTheme.sectionTitle("⚙  ${strings.settingsTitle}").apply { font = font.deriveFont(Font.BOLD, 18f) }, BorderLayout.LINE_START)
+            add(DesktopTheme.pillLabel("v${DesktopBuildConfig.VERSION_NAME}", DesktopTheme.palette.primary, DesktopTheme.palette.onPrimary), BorderLayout.LINE_END)
+        }
+        bodyPanel.add(headerBanner)
+        bodyPanel.add(Box.createVerticalStrut(12))
 
         // 1. Language & Appearance & Layout
         val generalCard = DesktopTheme.styledCard(elevated = false)

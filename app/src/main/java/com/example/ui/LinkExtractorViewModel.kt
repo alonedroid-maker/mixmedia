@@ -7,6 +7,7 @@ import com.example.download.DownloadStatus
 import com.example.download.DownloadTask
 import com.example.network.CurlRedirectResolver
 import com.example.network.CurlResolutionResult
+import com.example.network.DownloadCandidateOption
 import com.example.network.GitHubUpdateChecker
 import com.example.network.GitHubUpdateResult
 import com.example.network.SocialPlatform
@@ -107,6 +108,7 @@ data class LinkExtractorScreenState(
     val updateCheckState: UpdateCheckState = UpdateCheckState.Idle,
     val youtubeApiKey: String = "",
     val pendingXResult: CurlResolutionResult? = null,
+    val pendingDownloadOptionsResult: CurlResolutionResult? = null,
 )
 
 class LinkExtractorViewModel(
@@ -305,6 +307,7 @@ class LinkExtractorViewModel(
                 capturedFromExternalIntent = false,
                 uiState = ExtractorUiState.Idle,
                 pendingXResult = null,
+                pendingDownloadOptionsResult = null,
             )
         }
     }
@@ -317,6 +320,7 @@ class LinkExtractorViewModel(
                 capturedFromExternalIntent = false,
                 uiState = ExtractorUiState.Idle,
                 pendingXResult = null,
+                pendingDownloadOptionsResult = null,
             )
         }
     }
@@ -390,6 +394,33 @@ class LinkExtractorViewModel(
         _screenState.update { it.copy(pendingXResult = null) }
     }
 
+    fun selectDownloadOption(option: DownloadCandidateOption): CurlResolutionResult? {
+        val baseResult = _screenState.value.pendingDownloadOptionsResult
+            ?: (_screenState.value.uiState as? ExtractorUiState.Success)?.result
+            ?: return null
+
+        val updated = baseResult.copy(
+            directVideoUrl = option.url,
+            filename = option.fileName,
+            extension = option.extension ?: baseResult.extension,
+            fileSizeFormatted = option.fileSizeFormatted ?: baseResult.fileSizeFormatted,
+        )
+        addSuccessResult(updated)
+        _screenState.update { it.copy(pendingDownloadOptionsResult = null) }
+        return updated
+    }
+
+    fun openDownloadOptionsPicker() {
+        val current = (_screenState.value.uiState as? ExtractorUiState.Success)?.result ?: return
+        if (current.downloadOptions.size > 1) {
+            _screenState.update { it.copy(pendingDownloadOptionsResult = current) }
+        }
+    }
+
+    fun dismissDownloadOptionsPicker() {
+        _screenState.update { it.copy(pendingDownloadOptionsResult = null) }
+    }
+
     fun executeExtraction(cookieHeader: String? = null, youtubeApiKey: String? = null) {
         val rawInput = _screenState.value.inputText.trim()
         if (rawInput.isEmpty()) {
@@ -397,6 +428,7 @@ class LinkExtractorViewModel(
                 it.copy(
                     uiState = ExtractorUiState.Error(ErrorType.EMPTY_URL),
                     pendingXResult = null,
+                    pendingDownloadOptionsResult = null,
                 )
             }
             return
@@ -430,6 +462,7 @@ class LinkExtractorViewModel(
                 it.copy(
                     uiState = ExtractorUiState.Error(ErrorType.INVALID_URL),
                     pendingXResult = null,
+                    pendingDownloadOptionsResult = null,
                 )
             }
             return
@@ -443,6 +476,7 @@ class LinkExtractorViewModel(
             _screenState.update {
                 it.copy(
                     pendingXResult = null,
+                    pendingDownloadOptionsResult = null,
                     uiState = ExtractorUiState.Loading(
                         liveLog = "$ curl -L -v \"$extractedUrl\"\n",
                         currentHop = 1,
@@ -472,6 +506,12 @@ class LinkExtractorViewModel(
 
                 if (result.directVideoUrl != null || result.youtubeInfo != null) {
                     addSuccessResult(result)
+                    if (result.youtubeInfo == null &&
+                        result.xVideoVariants.size <= 1 &&
+                        result.downloadOptions.size > 1
+                    ) {
+                        _screenState.update { it.copy(pendingDownloadOptionsResult = result) }
+                    }
                 } else {
                     _screenState.update {
                         it.copy(

@@ -91,6 +91,7 @@ import com.example.media.TvReleaseStatus
 import com.example.media.WatchProviderInfo
 import com.example.media.WatchRegions
 import com.example.network.CurlResolutionResult
+import com.example.network.DownloadCandidateOption
 import java.text.DateFormat
 import java.util.Date
 
@@ -135,6 +136,8 @@ fun MovieSearchScreen(
     onDownloadInApp: (CurlResolutionResult) -> Unit = {},
     onDownloadAuthorizedUrl: (url: String, suggestedName: String?) -> Unit = { _, _ -> },
     onOpenXQualityPicker: () -> Unit = {},
+    onSelectDownloadOption: (DownloadCandidateOption) -> Unit = {},
+    onOpenDownloadOptionsPicker: () -> Unit = {},
     onOpenDownloads: () -> Unit = {},
     onShowMessage: (String) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -192,6 +195,8 @@ fun MovieSearchScreen(
                         onDownloadInApp = onDownloadInApp,
                         onDownloadAuthorizedUrl = onDownloadAuthorizedUrl,
                         onOpenXQualityPicker = onOpenXQualityPicker,
+                        onSelectDownloadOption = onSelectDownloadOption,
+                        onOpenDownloadOptionsPicker = onOpenDownloadOptionsPicker,
                         onOpenDownloads = onOpenDownloads,
                         onOpenInAppBrowser = onOpenProviderUrl,
                         onShowMessage = onShowMessage,

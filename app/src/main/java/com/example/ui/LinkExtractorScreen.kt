@@ -695,6 +695,8 @@ fun MediaXApp(
                                             )
                                         },
                                         onOpenXQualityPicker = viewModel::openXQualityPicker,
+                                        onSelectDownloadOption = { option -> viewModel.selectDownloadOption(option) },
+                                        onOpenDownloadOptionsPicker = viewModel::openDownloadOptionsPicker,
                                         onOpenDownloads = { viewModel.navigateTo(AppDestination.DOWNLOADS) },
                                         onShowMessage = ::showMessage,
                                     )
@@ -810,6 +812,8 @@ fun MediaXApp(
                                     )
                                 },
                                 onOpenXQualityPicker = viewModel::openXQualityPicker,
+                                onSelectDownloadOption = { option -> viewModel.selectDownloadOption(option) },
+                                onOpenDownloadOptionsPicker = viewModel::openDownloadOptionsPicker,
                             )
                         }
 
@@ -1022,6 +1026,23 @@ fun MediaXApp(
                     onDismiss = viewModel::dismissXQualityPicker,
                 )
             }
+
+            state.pendingDownloadOptionsResult?.let { optionsResult ->
+                DownloadOptionsPickerDialog(
+                    result = optionsResult,
+                    strings = strings,
+                    onDownloadOption = { option ->
+                        val updated = viewModel.selectDownloadOption(option)
+                        if (updated != null) {
+                            startDownloadFromResolver(updated)
+                        }
+                    },
+                    onSelectOption = { option ->
+                        viewModel.selectDownloadOption(option)
+                    },
+                    onDismiss = viewModel::dismissDownloadOptionsPicker,
+                )
+            }
         }
     }
 }
@@ -1042,6 +1063,8 @@ private fun ResolverScreen(
     onDownloadInApp: (CurlResolutionResult) -> Unit,
     onDownloadAuthorizedUrl: (url: String, suggestedName: String?) -> Unit,
     onOpenXQualityPicker: () -> Unit = {},
+    onSelectDownloadOption: (com.example.network.DownloadCandidateOption) -> Unit = {},
+    onOpenDownloadOptionsPicker: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -1380,6 +1403,12 @@ private fun ResolverScreen(
                                     onShareLink = ::shareDownloadUrl,
                                     onOpenXQualityPicker = if (uiState.result.xVideoVariants.size > 1) {
                                         onOpenXQualityPicker
+                                    } else {
+                                        null
+                                    },
+                                    onSelectDownloadOption = onSelectDownloadOption,
+                                    onOpenDownloadOptionsPicker = if (uiState.result.downloadOptions.size > 1) {
+                                        onOpenDownloadOptionsPicker
                                     } else {
                                         null
                                     },

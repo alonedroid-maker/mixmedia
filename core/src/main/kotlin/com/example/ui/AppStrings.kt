@@ -431,6 +431,10 @@ data class MediaXUiStrings(
     val unifiedHideResolverTools: String,
     val unifiedInlineResolverTitle: String,
     val unifiedDismissResult: String,
+    val downloadOptionsTitle: (Int) -> String,
+    val downloadOptionsPrompt: String,
+    val actionChooseDownloadOption: (Int) -> String,
+    val optionSelectedBadge: String,
 )
 
 data class XDownloaderStrings(
@@ -873,6 +877,10 @@ private val EnglishStrings = AppStrings(
         unifiedHideResolverTools = "Hide Tools",
         unifiedInlineResolverTitle = "Direct Link & Media Resolver",
         unifiedDismissResult = "Close",
+        downloadOptionsTitle = { count -> "Available Download Options ($count)" },
+        downloadOptionsPrompt = "Multiple downloadable files or qualities were found. Choose which option you want to download:",
+        actionChooseDownloadOption = { count -> "Choose Download Option ($count)" },
+        optionSelectedBadge = "Selected",
     ),
     xDownloader = XDownloaderStrings(
         title = "X / Twitter Video Downloader",
@@ -1310,6 +1318,10 @@ private val PersianStrings = AppStrings(
         unifiedHideResolverTools = "بستن ابزار",
         unifiedInlineResolverTitle = "استخراج و دانلود لینک مستقیم",
         unifiedDismissResult = "بستن",
+        downloadOptionsTitle = { count -> "گزینه‌های قابل دانلود ($count)" },
+        downloadOptionsPrompt = "چند فایل یا کیفیت در این صفحه پیدا شد؛ گزینه مورد نظر خود را انتخاب کنید:",
+        actionChooseDownloadOption = { count -> "انتخاب گزینه دانلود ($count فایل)" },
+        optionSelectedBadge = "انتخاب‌شده",
     ),
     xDownloader = XDownloaderStrings(
         title = "دانلودر ویدیو X (توییتر)",

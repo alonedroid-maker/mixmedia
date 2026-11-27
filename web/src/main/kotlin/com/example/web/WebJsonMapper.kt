@@ -21,7 +21,7 @@ import com.example.media.WatchProviderInfo
 import com.example.media.WatchRegions
 import com.example.media.WebSourceResult
 import com.example.network.CurlResolutionResult
-import com.example.network.RedirectHop
+import com.example.network.DownloadCandidateOption
 import com.example.network.XVideoVariant
 import com.example.network.YouTubeMetadataInfo
 import org.json.JSONArray
@@ -265,12 +265,10 @@ object WebJsonMapper {
         put("sourceUrl", res.sourceUrl)
         put("directVideoUrl", res.directVideoUrl ?: JSONObject.NULL)
         put("candidateVideoUrls", JSONArray(res.candidateVideoUrls))
+        put("downloadOptions", JSONArray().apply { res.downloadOptions.forEach { put(downloadOptionToJson(it)) } })
         put("filename", res.filename ?: JSONObject.NULL)
         put("extension", res.extension ?: JSONObject.NULL)
         put("fileSizeFormatted", res.fileSizeFormatted ?: JSONObject.NULL)
-        put("finalStatusCode", res.finalStatusCode)
-        put("hops", JSONArray().apply { res.hops.forEach { put(hopToJson(it)) } })
-        put("verboseLog", res.verboseLog)
         put("youtubeInfo", res.youtubeInfo?.let { youtubeToJson(it) } ?: JSONObject.NULL)
         put("mediaTitle", res.mediaTitle ?: JSONObject.NULL)
         put("mediaAuthor", res.mediaAuthor ?: JSONObject.NULL)
@@ -279,14 +277,13 @@ object WebJsonMapper {
         put("thumbnailUrl", res.thumbnailUrl ?: JSONObject.NULL)
     }
 
-    private fun hopToJson(h: RedirectHop): JSONObject = JSONObject().apply {
-        put("step", h.step)
-        put("requestUrl", h.requestUrl)
-        put("statusCode", h.statusCode)
-        put("statusMessage", h.statusMessage)
-        put("locationHeader", h.locationHeader ?: JSONObject.NULL)
-        put("contentType", h.contentType ?: JSONObject.NULL)
-        put("contentLength", h.contentLength ?: JSONObject.NULL)
+    private fun downloadOptionToJson(o: DownloadCandidateOption): JSONObject = JSONObject().apply {
+        put("url", o.url)
+        put("fileName", o.fileName)
+        put("extension", o.extension ?: JSONObject.NULL)
+        put("label", o.label ?: JSONObject.NULL)
+        put("qualityLabel", o.qualityLabel ?: JSONObject.NULL)
+        put("fileSizeFormatted", o.fileSizeFormatted ?: JSONObject.NULL)
     }
 
     private fun youtubeToJson(y: YouTubeMetadataInfo): JSONObject = JSONObject().apply {

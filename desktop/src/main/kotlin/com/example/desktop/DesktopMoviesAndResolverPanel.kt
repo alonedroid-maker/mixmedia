@@ -1,7 +1,6 @@
 package com.example.desktop
 
 import com.example.media.MediaGenre
-import com.example.media.MediaPreferences
 import com.example.media.MediaSearchPage
 import com.example.media.MediaSearchResult
 import com.example.media.MediaType
@@ -13,6 +12,7 @@ import com.example.media.TrendingFeedBundle
 import com.example.media.TrendingTimeWindow
 import com.example.network.CurlRedirectResolver
 import com.example.network.CurlResolutionResult
+import com.example.network.DownloadCandidateOption
 import com.example.network.UnsupportedPlatformException
 import com.example.network.VideoLinkExtractor
 import com.example.network.XExtractionException
@@ -22,29 +22,32 @@ import com.example.network.YouTubeUnavailableException
 import com.example.ui.AppLanguage
 import com.example.ui.stringsFor
 import java.awt.BorderLayout
-import java.awt.Color
 import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
 import java.awt.GridLayout
+import java.awt.Insets
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import javax.swing.Box
 import javax.swing.BoxLayout
-import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JFrame
 import javax.swing.JLabel
 import javax.swing.JOptionPane
 import javax.swing.JPanel
+import javax.swing.JProgressBar
 import javax.swing.JScrollPane
 import javax.swing.JTextArea
-import javax.swing.SwingConstants
+import javax.swing.SwingUtilities
 import javax.swing.border.EmptyBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
@@ -60,7 +63,8 @@ enum class MoviesPanelMode {
 
 /**
  * Windows Desktop Smart Hub combining Unified / Separate Movies & TV Discovery,
- * Trending Now shelf, Filters, Favorites, Recently Viewed, and Direct/Social/curl Link Resolver.
+ * Trending Now shelf, Responsive Poster Grid, Favorites, Recently Viewed, and
+ * Multi-Option Direct/Social Link Resolver.
  */
 class DesktopMoviesAndResolverPanel(
     private val ownerFrame: JFrame,
@@ -76,11 +80,16 @@ class DesktopMoviesAndResolverPanel(
     private val onSwitchToDownloads: () -> Unit,
 ) : JPanel(BorderLayout(12, 12)) {
 
+    private companion object {
+        val VIDEO_EXTENSIONS = setOf("mp4", "mkv", "webm", "mov", "m4v", "avi", "ts", "flv", "wmv", "m3u8")
+    }
+
     private var strings = stringsFor(getSettings().language)
     private var resolveJob: Job? = null
     private var searchJob: Job? = null
     private var currentResolution: CurlResolutionResult? = null
     private var selectedXVariant: XVideoVariant? = null
+    private var selectedDownloadOption: DownloadCandidateOption? = null
 
     private var mediaTypeFilter: MediaType? = null
     private var currentFilters = TmdbDiscoverFilters()
@@ -94,6 +103,12 @@ class DesktopMoviesAndResolverPanel(
     private val primaryGoButton = DesktopTheme.primaryButton(strings.discover.actionSearchMovies)
     private val cancelResolveButton = DesktopTheme.secondaryButton(strings.actionCancel).apply { isVisible = false }
     private val toggleDrawerButton = DesktopTheme.chipButton(strings.ui.unifiedQuickResolverTools)
+    private val loadingBar = JProgressBar().apply {
+        isIndeterminate = true
+        isVisible = false
+        preferredSize = Dimension(120, 4)
+        maximumSize = Dimension(Int.MAX_VALUE, 4)
+    }
 
     private val resolverStatusLabel = DesktopTheme.mutedLabel(strings.statusReady)
     private val resolverResultCard = JPanel().apply {
@@ -122,30 +137,28 @@ class DesktopMoviesAndResolverPanel(
         isOpaque = false
     }
 
+    private lateinit var mainScrollPane: JScrollPane
+
     init {
         isOpaque = false
-        border = EmptyBorder(12, 16, 12, 16)
+        border = EmptyBorder(14, 18, 14, 18)
         buildUi()
         refreshTranslationsAndData()
     }
 
     private fun buildUi() {
-        val northStack = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            isOpaque = false
-        }
-        northStack.add(buildSmartHeroCard())
-        northStack.add(Box.createVerticalStrut(10))
-        northStack.add(resolverResultCard)
-        add(northStack, BorderLayout.NORTH)
+        add(buildSmartHeroCard(), BorderLayout.NORTH)
 
         val scrollBody = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
         }
+        scrollBody.add(resolverResultCard)
+        scrollBody.add(Box.createVerticalStrut(10))
+
         if (mode != MoviesPanelMode.RESOLVER_ONLY) {
             scrollBody.add(buildFilterBar())
-            scrollBody.add(Box.createVerticalStrut(10))
+            scrollBody.add(Box.createVerticalStrut(12))
             scrollBody.add(searchResultsPanel)
             scrollBody.add(Box.createVerticalStrut(12))
             scrollBody.add(trendingPanel)
@@ -153,16 +166,16 @@ class DesktopMoviesAndResolverPanel(
             scrollBody.add(personalPanel)
         }
 
-        val scrollPane = JScrollPane(scrollBody).apply {
+        mainScrollPane = JScrollPane(scrollBody).apply {
             border = null
             viewport.background = DesktopTheme.palette.bg
-            verticalScrollBar.unitIncrement = 18
+            verticalScrollBar.unitIncrement = 20
         }
-        add(scrollPane, BorderLayout.CENTER)
+        add(mainScrollPane, BorderLayout.CENTER)
     }
 
     private fun buildSmartHeroCard(): JPanel {
-        val card = DesktopTheme.styledCard(elevated = false)
+        val card = DesktopTheme.heroCard(paddingV = 16, paddingH = 18)
         card.layout = BoxLayout(card, BoxLayout.Y_AXIS)
 
         val heroTitle = when (mode) {
@@ -175,13 +188,27 @@ class DesktopMoviesAndResolverPanel(
             MoviesPanelMode.MOVIES_ONLY -> strings.discover.discoverSubtitle
             MoviesPanelMode.RESOLVER_ONLY -> strings.inputHelper
         }
+        val modeBadge = when (mode) {
+            MoviesPanelMode.UNIFIED -> strings.ui.unifiedModeBadge
+            MoviesPanelMode.MOVIES_ONLY -> strings.ui.separateModeBadge
+            MoviesPanelMode.RESOLVER_ONLY -> strings.navResolver
+        }
 
-        val titleLbl = DesktopTheme.sectionTitle(heroTitle).apply { font = font.deriveFont(Font.BOLD, 17f) }
-        val subLbl = DesktopTheme.mutedLabel(heroSub)
-        card.add(titleLbl)
-        card.add(Box.createVerticalStrut(4))
-        card.add(subLbl)
-        card.add(Box.createVerticalStrut(10))
+        val headerBar = JPanel(BorderLayout(8, 0)).apply { isOpaque = false }
+        val titleStack = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+        }
+        titleStack.add(DesktopTheme.sectionTitle(heroTitle).apply { font = font.deriveFont(Font.BOLD, 18f) })
+        titleStack.add(Box.createVerticalStrut(3))
+        titleStack.add(DesktopTheme.mutedLabel(heroSub))
+        headerBar.add(titleStack, BorderLayout.CENTER)
+        headerBar.add(
+            DesktopTheme.pillLabel(modeBadge, DesktopTheme.palette.badgeBg, DesktopTheme.palette.primary),
+            BorderLayout.LINE_END,
+        )
+        card.add(headerBar)
+        card.add(Box.createVerticalStrut(12))
 
         val inputRow = JPanel(BorderLayout(8, 0)).apply { isOpaque = false }
         omniboxField.addActionListener { submitSmartInput() }
@@ -210,6 +237,8 @@ class DesktopMoviesAndResolverPanel(
             addActionListener {
                 omniboxField.text = ""
                 currentResolution = null
+                selectedXVariant = null
+                selectedDownloadOption = null
                 resolverResultCard.isVisible = false
                 if (mode != MoviesPanelMode.RESOLVER_ONLY) {
                     currentQuery = ""
@@ -222,6 +251,7 @@ class DesktopMoviesAndResolverPanel(
         primaryGoButton.addActionListener { submitSmartInput() }
         cancelResolveButton.addActionListener {
             resolveJob?.cancel()
+            loadingBar.isVisible = false
             cancelResolveButton.isVisible = false
             resolverStatusLabel.text = strings.errorCancelled
         }
@@ -231,7 +261,7 @@ class DesktopMoviesAndResolverPanel(
         rightBtns.add(cancelResolveButton)
         inputRow.add(rightBtns, BorderLayout.LINE_END)
         card.add(inputRow)
-        card.add(Box.createVerticalStrut(6))
+        card.add(Box.createVerticalStrut(8))
 
         val bottomMetaRow = JPanel(BorderLayout(8, 0)).apply { isOpaque = false }
         bottomMetaRow.add(modeHintLabel, BorderLayout.CENTER)
@@ -251,11 +281,13 @@ class DesktopMoviesAndResolverPanel(
         quickRow.add(resolverStatusLabel)
         bottomMetaRow.add(quickRow, BorderLayout.LINE_END)
         card.add(bottomMetaRow)
+        card.add(Box.createVerticalStrut(6))
+        card.add(loadingBar)
         return card
     }
 
     private fun buildFilterBar(): JPanel {
-        val bar = DesktopTheme.styledCard(elevated = false, paddingV = 10, paddingH = 12)
+        val bar = DesktopTheme.styledCard(elevated = false, paddingV = 10, paddingH = 14)
         bar.layout = FlowLayout(FlowLayout.LEADING, 8, 4)
 
         filterTypeAllBtn.addActionListener {
@@ -401,7 +433,9 @@ class DesktopMoviesAndResolverPanel(
         resolveJob?.cancel()
         currentResolution = null
         selectedXVariant = null
+        selectedDownloadOption = null
         resolverStatusLabel.text = strings.loadingNormalMessage
+        loadingBar.isVisible = true
         cancelResolveButton.isVisible = true
         resolverResultCard.isVisible = true
         resolverResultCard.removeAll()
@@ -414,6 +448,7 @@ class DesktopMoviesAndResolverPanel(
                 if (VideoLinkExtractor.looksLikeRawCurlTrace(rawInput)) {
                     val parsed = resolver.resolveFromRawTrace(rawInput)
                     currentResolution = parsed
+                    selectedDownloadOption = parsed.downloadOptions.firstOrNull()
                     resolverStatusLabel.text = if (parsed.directVideoUrl != null) strings.statusDone else strings.statusError
                     renderResolutionResult(parsed)
                     return@launch
@@ -434,8 +469,14 @@ class DesktopMoviesAndResolverPanel(
                 )
                 currentResolution = result
                 selectedXVariant = result.xVideoVariants.firstOrNull()
+                selectedDownloadOption = result.downloadOptions.firstOrNull()
                 resolverStatusLabel.text = strings.statusDone
                 renderResolutionResult(result)
+                SwingUtilities.invokeLater {
+                    if (::mainScrollPane.isInitialized) {
+                        mainScrollPane.verticalScrollBar.value = 0
+                    }
+                }
             } catch (e: UnsupportedPlatformException) {
                 resolverStatusLabel.text = when (e.platform.name) {
                     "INSTAGRAM" -> strings.errorInstagramUnsupported
@@ -448,46 +489,73 @@ class DesktopMoviesAndResolverPanel(
             } catch (e: Exception) {
                 resolverStatusLabel.text = e.localizedMessage ?: strings.errorNetworkGeneric
             } finally {
+                loadingBar.isVisible = false
                 cancelResolveButton.isVisible = false
             }
         }
     }
 
+    private fun isVideoExtension(extOrName: String?): Boolean {
+        val ext = extOrName?.substringAfterLast('.', extOrName)?.lowercase(Locale.US)?.trim() ?: return true
+        return ext in VIDEO_EXTENSIONS
+    }
+
     private fun renderResolutionResult(result: CurlResolutionResult) {
         resolverResultCard.removeAll()
-        val card = DesktopTheme.styledCard(elevated = true)
+        val p = DesktopTheme.palette
+        val card = DesktopTheme.styledCard(elevated = true, paddingV = 14, paddingH = 16)
         card.layout = BoxLayout(card, BoxLayout.Y_AXIS)
 
         val yt = result.youtubeInfo
         if (yt != null) {
             renderYouTubeCard(card, yt)
         } else {
-            val activeVariant = selectedXVariant
-            val effectiveUrl = activeVariant?.url ?: result.directVideoUrl
-            val effectiveName = activeVariant?.suggestedFileName
+            val activeX = selectedXVariant
+            val allOptions = result.downloadOptions
+            val activeOption = if (result.xVideoVariants.size <= 1) {
+                selectedDownloadOption ?: allOptions.firstOrNull()
+            } else null
+
+            val effectiveUrl = activeX?.url ?: activeOption?.url ?: result.directVideoUrl
+            val effectiveName = activeX?.suggestedFileName
+                ?: activeOption?.fileName
                 ?: result.filename
-                ?: "mediax_video.mp4"
+                ?: "mediax_file.mp4"
+            val effectiveExt = activeOption?.extension ?: result.extension
 
             val titleLine = result.mediaTitle?.let { "$it — $effectiveName" } ?: effectiveName
-            card.add(DesktopTheme.sectionTitle("${strings.resultCardTitle}: $titleLine"))
+            val topTitleRow = JPanel(BorderLayout(8, 0)).apply { isOpaque = false }
+            topTitleRow.add(DesktopTheme.sectionTitle("${strings.resultCardTitle}: $titleLine"), BorderLayout.CENTER)
+            topTitleRow.add(
+                DesktopTheme.secondaryButton(strings.ui.unifiedDismissResult).apply {
+                    addActionListener {
+                        currentResolution = null
+                        selectedXVariant = null
+                        selectedDownloadOption = null
+                        resolverResultCard.isVisible = false
+                    }
+                },
+                BorderLayout.LINE_END,
+            )
+            card.add(topTitleRow)
             card.add(Box.createVerticalStrut(4))
 
             val detailsMeta = listOfNotNull(
-                result.extension,
-                activeVariant?.fileSizeFormatted ?: result.fileSizeFormatted?.let { strings.resultSizeLabel(it) },
-                result.hops.takeIf { it.isNotEmpty() }?.let { strings.resultHopsLabel(it.size) },
+                effectiveExt,
+                activeX?.fileSizeFormatted ?: activeOption?.fileSizeFormatted ?: result.fileSizeFormatted?.let { strings.resultSizeLabel(it) },
                 result.mediaAuthor,
             ).joinToString("  •  ")
             if (detailsMeta.isNotBlank()) {
                 card.add(DesktopTheme.mutedLabel(detailsMeta))
-                card.add(Box.createVerticalStrut(6))
+                card.add(Box.createVerticalStrut(8))
             }
 
+            // X/Twitter multi-variant selector
             if (result.xVideoVariants.size > 1) {
                 val variantBar = JPanel(FlowLayout(FlowLayout.LEADING, 6, 4)).apply { isOpaque = false }
                 result.xVideoVariants.forEach { variant ->
                     val label = "${variant.qualityLabel}${variant.fileSizeFormatted?.let { " ($it)" } ?: ""}"
-                    val chip = DesktopTheme.chipButton(label, selected = variant == activeVariant)
+                    val chip = DesktopTheme.chipButton(label, selected = variant == activeX)
                     chip.addActionListener {
                         selectedXVariant = variant
                         renderResolutionResult(result)
@@ -495,6 +563,32 @@ class DesktopMoviesAndResolverPanel(
                     variantBar.add(chip)
                 }
                 card.add(variantBar)
+                card.add(Box.createVerticalStrut(8))
+            }
+
+            // Multi-option page picker (ALL downloadable links & qualities on resolved websites)
+            if (result.xVideoVariants.size <= 1 && allOptions.size > 1) {
+                val promptBanner = DesktopTheme.heroCard(paddingV = 10, paddingH = 14)
+                promptBanner.layout = BoxLayout(promptBanner, BoxLayout.Y_AXIS)
+                promptBanner.add(
+                    JLabel(strings.ui.downloadOptionsTitle(allOptions.size)).apply {
+                        foreground = p.primary
+                        font = font.deriveFont(Font.BOLD, 14f)
+                    }
+                )
+                promptBanner.add(Box.createVerticalStrut(2))
+                promptBanner.add(DesktopTheme.mutedLabel(strings.ui.downloadOptionsPrompt))
+                card.add(promptBanner)
+                card.add(Box.createVerticalStrut(8))
+
+                allOptions.forEach { option ->
+                    val isSelected = activeOption?.url == option.url
+                    card.add(buildDownloadOptionRow(option, result.customUserAgent, isSelected) { chosen ->
+                        selectedDownloadOption = chosen
+                        renderResolutionResult(result)
+                    })
+                    card.add(Box.createVerticalStrut(6))
+                }
                 card.add(Box.createVerticalStrut(6))
             }
 
@@ -515,11 +609,13 @@ class DesktopMoviesAndResolverPanel(
                         }
                     }
                 )
-                actionsRow.add(
-                    DesktopTheme.secondaryButton("▶ VLC / Play").apply {
-                        addActionListener { DesktopPlatformBridge.openInVlcOrSystemPlayer(effectiveUrl) }
-                    }
-                )
+                if (isVideoExtension(effectiveExt ?: effectiveName)) {
+                    actionsRow.add(
+                        DesktopTheme.secondaryButton("▶ VLC / Play").apply {
+                            addActionListener { DesktopPlatformBridge.openInVlcOrSystemPlayer(effectiveUrl) }
+                        }
+                    )
+                }
                 actionsRow.add(
                     DesktopTheme.secondaryButton(strings.actionCopyLink).apply {
                         addActionListener { DesktopPlatformBridge.copyToClipboard(effectiveUrl) }
@@ -536,8 +632,9 @@ class DesktopMoviesAndResolverPanel(
             }
         }
 
+        // Strict Developer-Mode gate for raw curl diagnostics
         if (getSettings().developerMode && result.verboseLog.isNotBlank()) {
-            card.add(Box.createVerticalStrut(8))
+            card.add(Box.createVerticalStrut(10))
             val traceArea = JTextArea(result.verboseLog.take(3500)).apply {
                 isEditable = false
                 rows = 7
@@ -552,6 +649,102 @@ class DesktopMoviesAndResolverPanel(
         resolverResultCard.isVisible = true
         resolverResultCard.revalidate()
         resolverResultCard.repaint()
+    }
+
+    private fun buildDownloadOptionRow(
+        option: DownloadCandidateOption,
+        customUa: String?,
+        isSelected: Boolean,
+        onSelect: (DownloadCandidateOption) -> Unit,
+    ): JPanel {
+        val p = DesktopTheme.palette
+        val row = DesktopTheme.styledCard(
+            elevated = false,
+            paddingV = 10,
+            paddingH = 12,
+            hoverable = true,
+            selected = isSelected,
+        )
+        row.layout = GridBagLayout()
+        row.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        row.addMouseListener(
+            object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent?) {
+                    onSelect(option)
+                }
+            }
+        )
+
+        val gbc = GridBagConstraints().apply {
+            gridx = 0
+            gridy = 0
+            weightx = 1.0
+            fill = GridBagConstraints.HORIZONTAL
+            insets = Insets(0, 0, 2, 10)
+        }
+
+        val infoStack = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+        }
+
+        val badgesRow = JPanel(FlowLayout(FlowLayout.LEADING, 6, 0)).apply { isOpaque = false }
+        if (!option.qualityLabel.isNullOrBlank()) {
+            badgesRow.add(DesktopTheme.pillLabel(option.qualityLabel!!, p.primary, p.onPrimary))
+        }
+        if (!option.extension.isNullOrBlank()) {
+            badgesRow.add(DesktopTheme.pillLabel(option.extension!!, p.badgeBg, p.textPrimary))
+        }
+        if (!option.fileSizeFormatted.isNullOrBlank()) {
+            badgesRow.add(DesktopTheme.pillLabel(option.fileSizeFormatted!!, p.badgeBg, p.secondary))
+        }
+        if (isSelected) {
+            badgesRow.add(DesktopTheme.pillLabel("✓ ${strings.ui.optionSelectedBadge}", p.secondary, p.onPrimary))
+        }
+        infoStack.add(badgesRow)
+        infoStack.add(Box.createVerticalStrut(4))
+
+        val displayLabel = option.label?.takeIf { it.isNotBlank() } ?: option.fileName
+        infoStack.add(
+            JLabel(displayLabel.take(92)).apply {
+                foreground = p.textPrimary
+                font = font.deriveFont(Font.BOLD, 13f)
+            }
+        )
+        if (!option.label.isNullOrBlank() && option.label != option.fileName) {
+            infoStack.add(DesktopTheme.mutedLabel(option.fileName.take(86)))
+        }
+        row.add(infoStack, gbc)
+
+        val actionsPanel = JPanel(FlowLayout(FlowLayout.TRAILING, 6, 0)).apply { isOpaque = false }
+        actionsPanel.add(
+            DesktopTheme.primaryButton(strings.actionDownloadHere).apply {
+                addActionListener {
+                    onSelect(option)
+                    onEnqueueDownload(option.url, option.fileName, customUa)
+                    onSwitchToDownloads()
+                }
+            }
+        )
+        if (isVideoExtension(option.extension ?: option.fileName)) {
+            actionsPanel.add(
+                DesktopTheme.secondaryButton("▶ VLC").apply {
+                    addActionListener { DesktopPlatformBridge.openInVlcOrSystemPlayer(option.url) }
+                }
+            )
+        }
+        actionsPanel.add(
+            DesktopTheme.secondaryButton(strings.actionCopyLink).apply {
+                addActionListener { DesktopPlatformBridge.copyToClipboard(option.url) }
+            }
+        )
+
+        gbc.gridx = 1
+        gbc.gridy = 0
+        gbc.weightx = 0.0
+        gbc.fill = GridBagConstraints.NONE
+        row.add(actionsPanel, gbc)
+        return row
     }
 
     private fun renderYouTubeCard(card: JPanel, yt: YouTubeMetadataInfo) {
@@ -593,20 +786,25 @@ class DesktopMoviesAndResolverPanel(
     private fun runMediaSearch(page: Int) {
         searchJob?.cancel()
         val settings = getSettings()
+        loadingBar.isVisible = true
         searchJob = uiScope.launch {
-            val res = metadataRepo.searchAndDiscoverMedia(
-                rawQuery = currentQuery,
-                mediaTypeFilter = mediaTypeFilter,
-                filters = currentFilters,
-                page = page,
-                preferences = settings.mediaPreferences,
-            )
-            res.onSuccess { pageData ->
-                searchResultsPage = pageData
-                renderSearchResults()
-            }.onFailure {
-                searchResultsPage = MediaSearchPage(emptyList())
-                renderSearchResults()
+            try {
+                val res = metadataRepo.searchAndDiscoverMedia(
+                    rawQuery = currentQuery,
+                    mediaTypeFilter = mediaTypeFilter,
+                    filters = currentFilters,
+                    page = page,
+                    preferences = settings.mediaPreferences,
+                )
+                res.onSuccess { pageData ->
+                    searchResultsPage = pageData
+                    renderSearchResults()
+                }.onFailure {
+                    searchResultsPage = MediaSearchPage(emptyList())
+                    renderSearchResults()
+                }
+            } finally {
+                loadingBar.isVisible = false
             }
         }
     }
@@ -672,12 +870,12 @@ class DesktopMoviesAndResolverPanel(
 
     private fun renderTrending(bundle: TrendingFeedBundle) {
         trendingPanel.removeAll()
-        val card = DesktopTheme.styledCard(elevated = false)
+        val card = DesktopTheme.styledCard(elevated = false, paddingV = 14, paddingH = 16)
         card.layout = BoxLayout(card, BoxLayout.Y_AXIS)
 
         val topBar = JPanel(BorderLayout(8, 0)).apply { isOpaque = false }
         val left = JPanel(FlowLayout(FlowLayout.LEADING, 8, 0)).apply { isOpaque = false }
-        left.add(DesktopTheme.sectionTitle(strings.discover.trendingSectionTitle))
+        left.add(DesktopTheme.sectionTitle("✦ ${strings.discover.trendingSectionTitle}"))
         if (bundle.attribution.isNotBlank()) {
             left.add(DesktopTheme.mutedLabel(strings.discover.trendingAttributedBy(bundle.attribution)))
         }
@@ -717,13 +915,13 @@ class DesktopMoviesAndResolverPanel(
         }
 
         if (bundle.movies.isNotEmpty()) {
-            card.add(Box.createVerticalStrut(8))
+            card.add(Box.createVerticalStrut(10))
             card.add(DesktopTheme.mutedLabel(strings.discover.trendingMoviesTitle).apply { font = font.deriveFont(Font.BOLD, 13f) })
             card.add(Box.createVerticalStrut(6))
             card.add(buildMediaCardGrid(bundle.movies))
         }
         if (bundle.tvShows.isNotEmpty()) {
-            card.add(Box.createVerticalStrut(10))
+            card.add(Box.createVerticalStrut(12))
             card.add(DesktopTheme.mutedLabel(strings.discover.trendingTvTitle).apply { font = font.deriveFont(Font.BOLD, 13f) })
             card.add(Box.createVerticalStrut(6))
             card.add(buildMediaCardGrid(bundle.tvShows))
@@ -761,15 +959,15 @@ class DesktopMoviesAndResolverPanel(
         if (favorites.isNotEmpty()) {
             personalPanel.add(DesktopTheme.sectionTitle(strings.discover.favoritesTitle))
             personalPanel.add(Box.createVerticalStrut(6))
-            personalPanel.add(buildMediaCardGrid(favorites.take(10)))
-            personalPanel.add(Box.createVerticalStrut(10))
+            personalPanel.add(buildMediaCardGrid(favorites.take(12)))
+            personalPanel.add(Box.createVerticalStrut(12))
         }
 
         val viewed = persistence.loadRecentlyViewed()
         if (viewed.isNotEmpty()) {
             personalPanel.add(DesktopTheme.sectionTitle(strings.discover.recentlyViewedTitle))
             personalPanel.add(Box.createVerticalStrut(6))
-            personalPanel.add(buildMediaCardGrid(viewed.take(10)))
+            personalPanel.add(buildMediaCardGrid(viewed.take(12)))
         }
 
         personalPanel.revalidate()
@@ -777,30 +975,46 @@ class DesktopMoviesAndResolverPanel(
     }
 
     private fun buildMediaCardGrid(items: List<MediaSearchResult>): JPanel {
-        val grid = JPanel(GridLayout(0, 5, 10, 10)).apply { isOpaque = false }
+        val gridLayout = GridLayout(0, computeGridColumns(width), 12, 12)
+        val grid = JPanel(gridLayout).apply { isOpaque = false }
+        grid.addComponentListener(
+            object : ComponentAdapter() {
+                override fun componentResized(e: ComponentEvent?) {
+                    val cols = computeGridColumns(grid.width)
+                    if (gridLayout.columns != cols) {
+                        gridLayout.columns = cols
+                        grid.revalidate()
+                    }
+                }
+            }
+        )
+
         val lang = getSettings().language
         items.forEach { item ->
-            val tile = DesktopTheme.styledCard(elevated = true, paddingV = 8, paddingH = 8)
+            val tile = DesktopTheme.styledCard(
+                elevated = true,
+                paddingV = 8,
+                paddingH = 8,
+                hoverable = true,
+            )
             tile.layout = BorderLayout(6, 6)
             tile.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            tile.preferredSize = Dimension(165, 255)
+            tile.preferredSize = Dimension(168, 272)
 
-            val posterLbl = JLabel(
-                if (item.mediaType == MediaType.TV) "TV" else "MOVIE",
-                SwingConstants.CENTER,
-            ).apply {
-                preferredSize = Dimension(145, 185)
-                isOpaque = true
-                background = DesktopTheme.palette.surface
-                foreground = DesktopTheme.palette.textSecondary
-            }
-            tile.add(posterLbl, BorderLayout.CENTER)
+            val typeText = if (item.mediaType == MediaType.TV) strings.discover.badgeTvShow else strings.discover.badgeMovie
+            val ratingText = item.imdbRating?.let { "★ %.1f".format(it) }
+            val posterPanel = RoundedPosterPanel(
+                posterWidth = 152,
+                posterHeight = 204,
+                mediaTypeBadge = typeText,
+                ratingBadge = ratingText,
+            )
+            tile.add(posterPanel, BorderLayout.CENTER)
 
             uiScope.launch {
-                val icon = DesktopPlatformBridge.loadScaledImage(item.posterUrl, persistence.imageCacheDir, 145, 185)
+                val icon = DesktopPlatformBridge.loadScaledImage(item.posterUrl, persistence.imageCacheDir, 170, 230)
                 if (icon != null) {
-                    posterLbl.icon = icon
-                    posterLbl.text = ""
+                    posterPanel.setPosterImage(icon.image)
                 }
             }
 
@@ -815,15 +1029,16 @@ class DesktopMoviesAndResolverPanel(
             }
             val titleLbl = JLabel(displayTitle.take(26)).apply {
                 foreground = DesktopTheme.palette.textPrimary
-                font = font.deriveFont(Font.BOLD, 12f)
+                font = font.deriveFont(Font.BOLD, 12.5f)
             }
             val subText = listOfNotNull(
                 item.releaseYear?.toString(),
-                item.imdbRating?.let { "★ %.1f".format(it) },
-                if (item.mediaType == MediaType.TV) strings.discover.badgeTvShow else strings.discover.badgeMovie,
+                if (lang == AppLanguage.FA && !item.persianTitle.isNullOrBlank()) item.title.take(18) else null,
             ).joinToString(" • ")
             metaBox.add(titleLbl)
-            metaBox.add(DesktopTheme.mutedLabel(subText))
+            if (subText.isNotBlank()) {
+                metaBox.add(DesktopTheme.mutedLabel(subText))
+            }
             tile.add(metaBox, BorderLayout.SOUTH)
 
             tile.addMouseListener(
@@ -836,6 +1051,11 @@ class DesktopMoviesAndResolverPanel(
             grid.add(tile)
         }
         return grid
+    }
+
+    private fun computeGridColumns(panelWidth: Int): Int {
+        val w = if (panelWidth > 200) panelWidth else 920
+        return (w / 184).coerceIn(2, 6)
     }
 
     private fun openDetails(item: MediaSearchResult) {

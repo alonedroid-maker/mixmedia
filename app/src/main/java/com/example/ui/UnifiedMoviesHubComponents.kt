@@ -93,6 +93,7 @@ import com.example.media.FuzzyTitleMatcher
 import com.example.media.MovieDiscoveryState
 import com.example.media.TmdbDiscoverFilters
 import com.example.network.CurlResolutionResult
+import com.example.network.DownloadCandidateOption
 import com.example.ui.theme.JetBrainsMonoFamily
 
 @Composable
@@ -121,6 +122,8 @@ fun UnifiedMoviesHeroAndResolverCard(
     onDownloadInApp: (CurlResolutionResult) -> Unit,
     onDownloadAuthorizedUrl: (url: String, suggestedName: String?) -> Unit,
     onOpenXQualityPicker: () -> Unit,
+    onSelectDownloadOption: (DownloadCandidateOption) -> Unit = {},
+    onOpenDownloadOptionsPicker: () -> Unit = {},
     onOpenDownloads: () -> Unit,
     onOpenInAppBrowser: (url: String, title: String) -> Unit,
     onShowMessage: (String) -> Unit,
@@ -914,6 +917,12 @@ fun UnifiedMoviesHeroAndResolverCard(
                                 onShareLink = ::shareText,
                                 onOpenXQualityPicker = if (uiState.result.xVideoVariants.size > 1) {
                                     onOpenXQualityPicker
+                                } else {
+                                    null
+                                },
+                                onSelectDownloadOption = onSelectDownloadOption,
+                                onOpenDownloadOptionsPicker = if (uiState.result.downloadOptions.size > 1) {
+                                    onOpenDownloadOptionsPicker
                                 } else {
                                     null
                                 },

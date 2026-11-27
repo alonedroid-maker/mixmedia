@@ -485,6 +485,38 @@ a {
   color: var(--danger);
 }
 
+.options-banner {
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.option-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.option-card:hover {
+  border-color: var(--accent);
+}
+
+.option-card.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+}
+
+.pill-quality {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .code-log {
   background: #080a0d;
   color: #cbd5e1;

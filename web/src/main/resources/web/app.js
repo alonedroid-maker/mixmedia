@@ -48,7 +48,10 @@
       openVlc: 'Open in VLC',
       copied: 'Link copied!',
       directUrlReady: 'Direct Media Ready',
-      redirectHops: 'Redirect Trace',
+      downloadOptionsTitle: 'Available Download Options',
+      downloadOptionsPrompt: 'Multiple downloadable files or qualities were found. Choose which option to download:',
+      selectedOptionBadge: 'Selected',
+      selectOptionBtn: 'Select',
       xVariants: 'X / Twitter Video Qualities',
       sourcesTitle: 'Source Discovery',
       searchEngines: 'Search Engines',
@@ -128,7 +131,10 @@
       openVlc: 'باز کردن در VLC',
       copied: 'لینک کپی شد!',
       directUrlReady: 'لینک مستقیم آماده دانلود',
-      redirectHops: 'مسیر ریدایرکت‌ها',
+      downloadOptionsTitle: 'گزینه‌های قابل دانلود',
+      downloadOptionsPrompt: 'چند فایل یا کیفیت در این صفحه پیدا شد؛ گزینه مورد نظر خود را برای دانلود انتخاب کنید:',
+      selectedOptionBadge: 'انتخاب‌شده',
+      selectOptionBtn: 'انتخاب',
       xVariants: 'کیفیت‌های ویدیو X / توییتر',
       sourcesTitle: 'یافتن منابع دانلود',
       searchEngines: 'موتورهای جستجو',
@@ -229,7 +235,7 @@
     resolving: false,
     resolveResult: null,
     resolveError: null,
-    resolveLog: null,
+    selectedOptionUrl: null,
   };
 
   function t(key) {
@@ -270,9 +276,7 @@
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const err = new Error(data.error || `HTTP ${res.status}`);
-      err.verboseLog = data.verboseLog || '';
-      throw err;
+      throw new Error(data.error || `HTTP ${res.status}`);
     }
     return data;
   }
@@ -667,7 +671,7 @@
               onClick: () => {
                 runtime.resolveResult = null;
                 runtime.resolveError = null;
-                runtime.resolveLog = null;
+                runtime.selectedOptionUrl = null;
                 render();
               },
             })
@@ -705,9 +709,6 @@
 
     if (runtime.resolveError) {
       card.appendChild(el('div', { class: 'badge err', text: runtime.resolveError }));
-      if (runtime.resolveLog) {
-        card.appendChild(el('pre', { class: 'code-log', style: 'margin-top:10px;', text: runtime.resolveLog }));
-      }
       return card;
     }
 
@@ -726,17 +727,111 @@
       );
     }
 
-    const directSafe = safeUrl(r.directVideoUrl);
+    const options = buildNormalizedDownloadOptions(r);
+    if (options.length > 1) {
+      const selectedUrl = runtime.selectedOptionUrl || options[0].url;
+      card.appendChild(
+        el('div', { class: 'options-banner' }, [
+          el('div', { class: 'section-header', style: 'margin-bottom:4px;' }, [
+            el('strong', { text: `${t('downloadOptionsTitle')} (${options.length})` }),
+            el('span', { class: 'badge ok', text: t('directUrlReady') }),
+          ]),
+          el('div', { class: 'muted', text: t('downloadOptionsPrompt') }),
+        ])
+      );
+
+      const box = el('div', { class: 'list-stack', style: 'margin-top:10px;' });
+      options.forEach((opt) => {
+        const optSafe = safeUrl(opt.url);
+        if (!optSafe) return;
+        const isSelected = optSafe === selectedUrl;
+        const fname = opt.fileName || 'mediax-file';
+        const proxyUrl = `${apiBase()}/api/download-proxy?url=${encodeURIComponent(optSafe)}&filename=${encodeURIComponent(fname)}`;
+        const isVideo = isVideoExtension(opt.extension, fname);
+
+        box.appendChild(
+          el('div', { class: `option-card${isSelected ? ' selected' : ''}` }, [
+            el('div', { class: 'item-row-head' }, [
+              el('div', { class: 'chips-row', style: 'align-items:center;' }, [
+                opt.qualityLabel ? el('span', { class: 'badge pill-quality', text: opt.qualityLabel }) : null,
+                opt.extension ? el('span', { class: 'badge', text: opt.extension }) : null,
+                opt.fileSizeFormatted ? el('span', { class: 'badge', text: opt.fileSizeFormatted }) : null,
+                isSelected ? el('span', { class: 'badge ok', text: t('selectedOptionBadge') }) : null,
+              ]),
+            ]),
+            opt.label ? el('div', { style: 'font-weight:700;', text: opt.label }) : null,
+            el('div', { style: 'word-break:break-all; font-weight:600; font-size:0.9rem;', text: fname }),
+            el('div', { class: 'chips-row' }, [
+              el('a', {
+                class: 'btn btn-accent',
+                href: proxyUrl,
+                download: fname,
+                onClick: () => {
+                  runtime.selectedOptionUrl = optSafe;
+                  recordDownloadHistory(fname, optSafe, opt.fileSizeFormatted);
+                },
+                text: t('downloadFile'),
+              }),
+              isVideo
+                ? el('button', {
+                    type: 'button',
+                    class: 'btn btn-secondary',
+                    text: t('playPreview'),
+                    onClick: () => {
+                      runtime.selectedOptionUrl = optSafe;
+                      recordDownloadHistory(fname, optSafe, opt.fileSizeFormatted);
+                      openVideoPreviewModal(fname, proxyUrl, optSafe);
+                    },
+                  })
+                : null,
+              el('button', {
+                type: 'button',
+                class: 'btn btn-secondary',
+                text: t('copyUrl'),
+                onClick: () => copyText(optSafe),
+              }),
+              isVideo
+                ? el('a', {
+                    class: 'btn btn-secondary',
+                    href: `vlc://${optSafe}`,
+                    text: t('openVlc'),
+                  })
+                : null,
+              !isSelected
+                ? el('button', {
+                    type: 'button',
+                    class: 'chip-btn',
+                    text: t('selectOptionBtn'),
+                    onClick: () => {
+                      runtime.selectedOptionUrl = optSafe;
+                      render();
+                    },
+                  })
+                : null,
+            ]),
+          ])
+        );
+      });
+      card.appendChild(box);
+      return card;
+    }
+
+    const single = options[0];
+    const directSafe = safeUrl(single ? single.url : r.directVideoUrl);
     if (directSafe) {
-      const fname = r.filename || 'mediax-video.mp4';
+      const fname = (single && single.fileName) || r.filename || 'mediax-video.mp4';
+      const ext = (single && single.extension) || r.extension;
+      const sizeFmt = (single && single.fileSizeFormatted) || r.fileSizeFormatted;
+      const isVideo = isVideoExtension(ext, fname);
       const proxyDownloadUrl = `${apiBase()}/api/download-proxy?url=${encodeURIComponent(directSafe)}&filename=${encodeURIComponent(fname)}`;
       const vlcSafe = `vlc://${directSafe}`;
       card.appendChild(
         el('div', { class: 'item-row', style: 'margin-bottom:12px;' }, [
           el('div', { class: 'item-row-head' }, [
             el('span', { class: 'badge ok', text: t('directUrlReady') }),
-            el('span', { class: 'badge', text: [r.extension, r.fileSizeFormatted].filter(Boolean).join(' • ') || 'MEDIA' }),
+            el('span', { class: 'badge', text: [single && single.qualityLabel, ext, sizeFmt].filter(Boolean).join(' • ') || 'MEDIA' }),
           ]),
+          single && single.label ? el('div', { style: 'font-weight:700;', text: single.label }) : null,
           el('div', { style: 'word-break:break-all; font-weight:700;', text: fname }),
           el('div', { class: 'muted', style: 'word-break:break-all; font-size:0.8rem;', text: directSafe }),
           el('div', { class: 'chips-row' }, [
@@ -744,74 +839,90 @@
               class: 'btn btn-accent',
               href: proxyDownloadUrl,
               download: fname,
-              onClick: () => recordDownloadHistory(fname, directSafe, r.fileSizeFormatted),
+              onClick: () => recordDownloadHistory(fname, directSafe, sizeFmt),
               text: t('downloadFile'),
             }),
-            el('button', {
-              type: 'button',
-              class: 'btn btn-secondary',
-              text: t('playPreview'),
-              onClick: () => openVideoPreviewModal(fname, proxyDownloadUrl, directSafe),
-            }),
+            isVideo
+              ? el('button', {
+                  type: 'button',
+                  class: 'btn btn-secondary',
+                  text: t('playPreview'),
+                  onClick: () => openVideoPreviewModal(fname, proxyDownloadUrl, directSafe),
+                })
+              : null,
             el('button', {
               type: 'button',
               class: 'btn btn-secondary',
               text: t('copyUrl'),
               onClick: () => copyText(directSafe),
             }),
-            el('a', {
-              class: 'btn btn-secondary',
-              href: vlcSafe,
-              text: t('openVlc'),
-            }),
+            isVideo
+              ? el('a', {
+                  class: 'btn btn-secondary',
+                  href: vlcSafe,
+                  text: t('openVlc'),
+                })
+              : null,
           ]),
         ])
       );
     }
 
-    if (Array.isArray(r.xVideoVariants) && r.xVideoVariants.length > 0) {
-      const box = el('div', { class: 'list-stack', style: 'margin-bottom:12px;' }, [
-        el('strong', { text: t('xVariants') }),
-      ]);
-      r.xVideoVariants.forEach((v) => {
-        const vSafe = safeUrl(v.url);
-        if (!vSafe) return;
-        const fname = v.suggestedFileName || 'x-video.mp4';
-        const proxyUrl = `${apiBase()}/api/download-proxy?url=${encodeURIComponent(vSafe)}&filename=${encodeURIComponent(fname)}`;
-        box.appendChild(
-          el('div', { class: 'item-row' }, [
-            el('div', { class: 'item-row-head' }, [
-              el('strong', { text: `${v.qualityLabel} (${v.container})` }),
-              v.fileSizeFormatted ? el('span', { class: 'badge', text: v.fileSizeFormatted }) : null,
-            ]),
-            el('div', { class: 'chips-row' }, [
-              el('a', {
-                class: 'btn btn-accent',
-                href: proxyUrl,
-                download: fname,
-                onClick: () => recordDownloadHistory(fname, vSafe, v.fileSizeFormatted),
-                text: t('downloadFile'),
-              }),
-              el('button', {
-                type: 'button',
-                class: 'btn btn-secondary',
-                text: t('playPreview'),
-                onClick: () => openVideoPreviewModal(fname, proxyUrl, vSafe),
-              }),
-              el('button', { type: 'button', class: 'btn btn-secondary', text: t('copyUrl'), onClick: () => copyText(vSafe) }),
-            ]),
-          ])
-        );
-      });
-      card.appendChild(box);
-    }
-
-    if (r.verboseLog) {
-      card.appendChild(el('strong', { text: t('redirectHops') }));
-      card.appendChild(el('pre', { class: 'code-log', style: 'margin-top:8px;', text: r.verboseLog }));
-    }
-
     return card;
+  }
+
+  function isVideoExtension(ext, fileName) {
+    const e = (ext || (fileName && fileName.includes('.') ? fileName.split('.').pop() : '') || '').toLowerCase();
+    return ['mkv', 'mp4', 'mov', 'webm', 'm4v', 'avi', 'm3u8', 'ts', 'flv', '3gp'].includes(e);
+  }
+
+  function buildNormalizedDownloadOptions(r) {
+    const out = [];
+    const seen = new Set();
+    if (Array.isArray(r.xVideoVariants) && r.xVideoVariants.length > 0) {
+      r.xVideoVariants.forEach((v) => {
+        const u = safeUrl(v.url);
+        if (!u || seen.has(u)) return;
+        seen.add(u);
+        out.push({
+          url: u,
+          fileName: v.suggestedFileName || 'x-video.mp4',
+          extension: (v.container || 'MP4').toUpperCase(),
+          label: null,
+          qualityLabel: v.qualityLabel || null,
+          fileSizeFormatted: v.fileSizeFormatted || null,
+        });
+      });
+    }
+    if (Array.isArray(r.downloadOptions) && r.downloadOptions.length > 0) {
+      r.downloadOptions.forEach((o) => {
+        const u = safeUrl(o.url);
+        if (!u || seen.has(u)) return;
+        seen.add(u);
+        out.push({
+          url: u,
+          fileName: o.fileName || 'mediax-file',
+          extension: o.extension || null,
+          label: o.label || null,
+          qualityLabel: o.qualityLabel || null,
+          fileSizeFormatted: o.fileSizeFormatted || null,
+        });
+      });
+    }
+    if (out.length === 0 && r.directVideoUrl) {
+      const u = safeUrl(r.directVideoUrl);
+      if (u) {
+        out.push({
+          url: u,
+          fileName: r.filename || 'mediax-file',
+          extension: r.extension || null,
+          label: null,
+          qualityLabel: null,
+          fileSizeFormatted: r.fileSizeFormatted || null,
+        });
+      }
+    }
+    return out;
   }
 
   function renderDownloadsView() {
@@ -1150,18 +1261,19 @@
     runtime.resolving = true;
     runtime.resolveResult = null;
     runtime.resolveError = null;
-    runtime.resolveLog = null;
+    runtime.selectedOptionUrl = null;
     render();
 
     try {
       const data = await apiPost('/api/resolve', { url });
       runtime.resolveResult = data;
-      if (data.directVideoUrl) {
+      runtime.selectedOptionUrl = data.directVideoUrl || null;
+      const optionCount = (data.downloadOptions || []).length + (data.xVideoVariants || []).length;
+      if (data.directVideoUrl && optionCount <= 1) {
         recordDownloadHistory(data.filename || 'mediax-video.mp4', data.directVideoUrl, data.fileSizeFormatted);
       }
     } catch (e) {
       runtime.resolveError = e.message || 'Resolution failed';
-      runtime.resolveLog = e.verboseLog || '';
     } finally {
       runtime.resolving = false;
       render();

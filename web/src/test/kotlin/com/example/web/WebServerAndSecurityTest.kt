@@ -1,5 +1,8 @@
 package com.example.web
 
+import com.example.network.CurlResolutionResult
+import com.example.network.DownloadCandidateOption
+import com.example.network.RedirectHop
 import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.URL
@@ -109,5 +112,70 @@ class WebServerAndSecurityTest {
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
         val body = stream?.bufferedReader()?.readText().orEmpty()
         return code to body
+    }
+
+    @Test
+    fun `resolutionResultToJson includes all downloadOptions and omits curl verboseLog and hops`() {
+        val sample = CurlResolutionResult(
+            sourceUrl = "https://www.example.com/movie/123",
+            directVideoUrl = "https://cdn.example.com/movie-1080p.mkv",
+            candidateVideoUrls = listOf(
+                "https://cdn.example.com/movie-1080p.mkv",
+                "https://cdn.example.com/movie-720p.mkv",
+                "https://cdn.example.com/movie.srt",
+            ),
+            filename = "movie-1080p.mkv",
+            extension = "MKV",
+            fileSizeFormatted = "1.8 GB",
+            finalStatusCode = 200,
+            hops = listOf(
+                RedirectHop(
+                    step = 1,
+                    requestUrl = "https://www.example.com/movie/123",
+                    statusCode = 200,
+                    statusMessage = "OK",
+                    locationHeader = null,
+                    contentType = "text/html",
+                    contentLength = 1234L,
+                )
+            ),
+            verboseLog = "$ curl -L -v \"https://www.example.com/movie/123\"\n< HTTP/1.1 200 OK",
+            mediaTitle = "Sample Movie 2026",
+            downloadOptions = listOf(
+                DownloadCandidateOption(
+                    url = "https://cdn.example.com/movie-1080p.mkv",
+                    fileName = "movie-1080p.mkv",
+                    extension = "MKV",
+                    label = "کیفیت 1080p",
+                    qualityLabel = "1080p",
+                    fileSizeFormatted = "1.8 GB",
+                ),
+                DownloadCandidateOption(
+                    url = "https://cdn.example.com/movie-720p.mkv",
+                    fileName = "movie-720p.mkv",
+                    extension = "MKV",
+                    label = "کیفیت 720p",
+                    qualityLabel = "720p",
+                    fileSizeFormatted = "950 MB",
+                ),
+                DownloadCandidateOption(
+                    url = "https://cdn.example.com/movie.srt",
+                    fileName = "movie.srt",
+                    extension = "SRT",
+                    label = "زیرنویس فارسی",
+                    qualityLabel = null,
+                    fileSizeFormatted = null,
+                ),
+            ),
+        )
+
+        val json = WebJsonMapper.resolutionResultToJson(sample)
+        assertFalse(json.has("verboseLog"))
+        assertFalse(json.has("hops"))
+        assertFalse(json.has("finalStatusCode"))
+        assertTrue(json.has("downloadOptions"))
+        assertEquals(3, json.getJSONArray("downloadOptions").length())
+        assertEquals("1080p", json.getJSONArray("downloadOptions").getJSONObject(0).getString("qualityLabel"))
+        assertEquals("SRT", json.getJSONArray("downloadOptions").getJSONObject(2).getString("extension"))
     }
 }
