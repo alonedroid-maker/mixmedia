@@ -821,6 +821,9 @@ class MetadataRepository(
                         title = summary.title,
                         imdbId = summary.imdbId,
                         knownWikidataId = summary.wikidataId,
+                        mediaType = summary.mediaType,
+                        releaseYear = summary.releaseYear,
+                        originalTitle = summary.originalTitle,
                     )
                 }
 
@@ -872,9 +875,25 @@ class MetadataRepository(
                     ?: wiki?.englishOverview
                     ?: summary.overview
 
-                val faOverview = tmdbDetails?.persianOverview
-                    ?: wiki?.persianOverview
-                    ?: summary.persianOverview
+                val verifiedWikiFa = wiki?.persianOverview?.takeIf {
+                    ZeroKeyMetadataEnricher.isValidPersianMediaExtract(
+                        extract = it,
+                        releaseYear = summary.releaseYear,
+                        requireMediaKeywords = false,
+                    )
+                }
+                val verifiedSummaryFa = summary.persianOverview?.takeIf {
+                    tmdbDetails == null &&
+                        wiki?.wikidataId == null &&
+                        ZeroKeyMetadataEnricher.isValidPersianMediaExtract(
+                            extract = it,
+                            releaseYear = summary.releaseYear,
+                            requireMediaKeywords = true,
+                        )
+                }
+                val faOverview = tmdbDetails?.persianOverview?.takeIf { it.isNotBlank() }
+                    ?: verifiedWikiFa
+                    ?: verifiedSummaryFa
 
                 val faTitle = tmdbDetails?.persianTitle
                     ?: wiki?.persianTitle
@@ -973,14 +992,12 @@ class MetadataRepository(
                 runCatching { proxy.getMovieDetails(resolvedId, language = "en-US") }.getOrNull()
                     ?.takeIf { it.isSuccessful }?.body()
             }
-            val faDef = if (langPref != SearchLanguagePreference.EN) {
-                async {
-                    runCatching { proxy.getMovieDetails(resolvedId, language = "fa-IR", appendToResponse = null) }.getOrNull()
-                        ?.takeIf { it.isSuccessful }?.body()
-                }
-            } else null
+            val faDef = async {
+                runCatching { proxy.getMovieDetails(resolvedId, language = "fa-IR", appendToResponse = null) }.getOrNull()
+                    ?.takeIf { it.isSuccessful }?.body()
+            }
             val enDto = enDef.await() ?: return@supervisorScope null
-            val faDto = faDef?.await()
+            val faDto = faDef.await()
             return@supervisorScope TmdbDtoMappers.mapMovieDetails(enDto, faDto, todayIso, region)
         }
 
@@ -988,14 +1005,12 @@ class MetadataRepository(
             runCatching { proxy.getTvDetails(resolvedId, language = "en-US") }.getOrNull()
                 ?.takeIf { it.isSuccessful }?.body()
         }
-        val faDef = if (langPref != SearchLanguagePreference.EN) {
-            async {
-                runCatching { proxy.getTvDetails(resolvedId, language = "fa-IR", appendToResponse = null) }.getOrNull()
-                    ?.takeIf { it.isSuccessful }?.body()
-            }
-        } else null
+        val faDef = async {
+            runCatching { proxy.getTvDetails(resolvedId, language = "fa-IR", appendToResponse = null) }.getOrNull()
+                ?.takeIf { it.isSuccessful }?.body()
+        }
         val enDto = enDef.await() ?: return@supervisorScope null
-        val faDto = faDef?.await()
+        val faDto = faDef.await()
         val parsed = TmdbDtoMappers.mapTvDetails(enDto, faDto, region) ?: return@supervisorScope null
 
         if (parsed.seasons.isNotEmpty()) {
@@ -1045,20 +1060,34 @@ class MetadataRepository(
 
         for (hit in imdbHits) {
             val bridge = findMatchingBridge(hit.title)
+            val safeBridgeFa = bridge?.persianExtract?.takeIf {
+                ZeroKeyMetadataEnricher.isValidPersianMediaExtract(
+                    extract = it,
+                    releaseYear = hit.releaseYear,
+                    requireMediaKeywords = true,
+                )
+            }
             result.add(
                 hit.copy(
                     persianTitle = bridge?.persianTitle ?: hit.persianTitle,
-                    persianOverview = bridge?.persianExtract ?: hit.persianOverview,
+                    persianOverview = safeBridgeFa ?: hit.persianOverview,
                     wikidataId = bridge?.wikidataId ?: hit.wikidataId,
                 )
             )
         }
         for (tv in tvMazeHits) {
             val bridge = findMatchingBridge(tv.title)
+            val safeBridgeFa = bridge?.persianExtract?.takeIf {
+                ZeroKeyMetadataEnricher.isValidPersianMediaExtract(
+                    extract = it,
+                    releaseYear = tv.releaseYear,
+                    requireMediaKeywords = true,
+                )
+            }
             result.add(
                 tv.copy(
                     persianTitle = bridge?.persianTitle ?: tv.persianTitle,
-                    persianOverview = bridge?.persianExtract ?: tv.persianOverview,
+                    persianOverview = safeBridgeFa ?: tv.persianOverview,
                     wikidataId = bridge?.wikidataId ?: tv.wikidataId,
                 )
             )

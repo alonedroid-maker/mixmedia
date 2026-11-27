@@ -16,3 +16,9 @@
 local.properties
 .env
 debug.keystore
+core/build/
+desktop/build/
+desktop/installer/windows/dist-stage/
+desktop/installer/windows/resource.res
+release-output-windows/
+release-output/

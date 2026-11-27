@@ -1,7 +1,6 @@
 package com.example.desktop
 
 import com.example.media.ArchiveCacheStore
-import com.example.media.MediaPersistenceKeys
 import com.example.media.MediaPreferences
 import com.example.media.MediaSearchResult
 import com.example.media.MediaType
@@ -192,10 +191,11 @@ class DesktopPersistence(
     }
 
     fun loadSourceSites(): List<SourceSiteConfig> = synchronized(lock) {
-        if (!sourceSitesFile.exists()) return SourceSitesCatalog.defaultSites()
+        val defaults = SourceSitesCatalog.BUILT_IN_SITES
+        if (!sourceSitesFile.exists()) return defaults
         return try {
             val arr = JSONArray(sourceSitesFile.readText(Charsets.UTF_8))
-            val loaded = buildList(arr.length()) {
+            val saved = buildList(arr.length()) {
                 for (i in 0 until arr.length()) {
                     val obj = arr.optJSONObject(i) ?: continue
                     val baseUrl = obj.optString("baseUrl")
@@ -205,8 +205,8 @@ class DesktopPersistence(
                             id = obj.optString("id"),
                             name = obj.optString("name"),
                             baseUrl = baseUrl,
-                            searchPathTemplate = obj.optNullableString("searchPathTemplate"),
-                            archiveIndexUrl = obj.optNullableString("archiveIndexUrl"),
+                            searchUrlTemplate = obj.optString("searchUrlTemplate", baseUrl),
+                            isArchive = obj.optBoolean("isArchive", false),
                             enabled = obj.optBoolean("enabled", true),
                             isCustom = obj.optBoolean("isCustom", false),
                             requiresDomesticIpHint = obj.optBoolean("requiresDomesticIpHint", false),
@@ -214,11 +214,23 @@ class DesktopPersistence(
                     )
                 }
             }
-            if (loaded.isEmpty()) SourceSitesCatalog.defaultSites()
-            else SourceSitesCatalog.mergeWithBuiltinCatalog(loaded)
+            if (saved.isEmpty()) defaults else mergeWithBuiltInCatalog(saved, defaults)
         } catch (_: Exception) {
-            SourceSitesCatalog.defaultSites()
+            defaults
         }
+    }
+
+    private fun mergeWithBuiltInCatalog(
+        saved: List<SourceSiteConfig>,
+        defaults: List<SourceSiteConfig>,
+    ): List<SourceSiteConfig> {
+        val savedById = saved.associateBy { it.id }
+        val builtInMerged = defaults.map { builtIn ->
+            val previous = savedById[builtIn.id]
+            if (previous != null) builtIn.copy(enabled = previous.enabled) else builtIn
+        }
+        val customSites = saved.filter { it.isCustom }
+        return builtInMerged + customSites
     }
 
     fun saveSourceSites(sites: List<SourceSiteConfig>) = synchronized(lock) {
@@ -229,8 +241,8 @@ class DesktopPersistence(
                     put("id", s.id)
                     put("name", s.name)
                     put("baseUrl", s.baseUrl)
-                    put("searchPathTemplate", s.searchPathTemplate ?: JSONObject.NULL)
-                    put("archiveIndexUrl", s.archiveIndexUrl ?: JSONObject.NULL)
+                    put("searchUrlTemplate", s.searchUrlTemplate)
+                    put("isArchive", s.isArchive)
                     put("enabled", s.enabled)
                     put("isCustom", s.isCustom)
                     put("requiresDomesticIpHint", s.requiresDomesticIpHint)
@@ -313,21 +325,24 @@ class DesktopPersistence(
             id = obj.optString("id"),
             mediaType = runCatching { MediaType.valueOf(obj.optString("mediaType")) }.getOrDefault(MediaType.MOVIE),
             title = obj.optString("title"),
-            originalTitle = obj.optNullableString("originalTitle"),
             persianTitle = obj.optNullableString("persianTitle"),
+            originalTitle = obj.optNullableString("originalTitle"),
             releaseYear = obj.optInt("releaseYear", -1).takeIf { it > 1800 },
-            endYear = obj.optInt("endYear", -1).takeIf { it > 1800 },
             posterUrl = obj.optNullableString("posterUrl"),
-            backdropUrl = obj.optNullableString("backdropUrl"),
-            rating = obj.optDouble("rating", Double.NaN).takeIf { !it.isNaN() && it > 0.0 },
-            overview = obj.optNullableString("overview"),
+            runtimeMinutes = obj.optInt("runtimeMinutes", -1).takeIf { it > 0 },
             genres = genres,
+            imdbRating = obj.optDouble("imdbRating", Double.NaN).takeIf { !it.isNaN() && it > 0.0 },
+            overview = obj.optNullableString("overview"),
+            persianOverview = obj.optNullableString("persianOverview"),
             imdbId = obj.optNullableString("imdbId"),
             tmdbId = obj.optInt("tmdbId", -1).takeIf { it > 0 },
             tvMazeId = obj.optInt("tvMazeId", -1).takeIf { it > 0 },
+            wikidataId = obj.optNullableString("wikidataId"),
             seasonCount = obj.optInt("seasonCount", -1).takeIf { it > 0 },
-            releaseStatus = TvReleaseStatus.fromCode(obj.optNullableString("releaseStatus")),
-            sourceLabel = obj.optString("sourceLabel", ""),
+            tvReleaseStatus = runCatching {
+                TvReleaseStatus.valueOf(obj.optString("tvReleaseStatus", TvReleaseStatus.UNKNOWN.name))
+            }.getOrDefault(TvReleaseStatus.UNKNOWN),
+            digitalReleaseDate = obj.optNullableString("digitalReleaseDate"),
         )
     }
 
@@ -341,21 +356,22 @@ class DesktopPersistence(
         put("id", item.id)
         put("mediaType", item.mediaType.name)
         put("title", item.title)
-        put("originalTitle", item.originalTitle ?: JSONObject.NULL)
         put("persianTitle", item.persianTitle ?: JSONObject.NULL)
+        put("originalTitle", item.originalTitle ?: JSONObject.NULL)
         put("releaseYear", item.releaseYear ?: JSONObject.NULL)
-        put("endYear", item.endYear ?: JSONObject.NULL)
         put("posterUrl", item.posterUrl ?: JSONObject.NULL)
-        put("backdropUrl", item.backdropUrl ?: JSONObject.NULL)
-        put("rating", item.rating ?: JSONObject.NULL)
-        put("overview", item.overview ?: JSONObject.NULL)
+        put("runtimeMinutes", item.runtimeMinutes ?: JSONObject.NULL)
         put("genres", JSONArray(item.genres))
+        put("imdbRating", item.imdbRating ?: JSONObject.NULL)
+        put("overview", item.overview ?: JSONObject.NULL)
+        put("persianOverview", item.persianOverview ?: JSONObject.NULL)
         put("imdbId", item.imdbId ?: JSONObject.NULL)
         put("tmdbId", item.tmdbId ?: JSONObject.NULL)
         put("tvMazeId", item.tvMazeId ?: JSONObject.NULL)
+        put("wikidataId", item.wikidataId ?: JSONObject.NULL)
         put("seasonCount", item.seasonCount ?: JSONObject.NULL)
-        put("releaseStatus", item.releaseStatus.code)
-        put("sourceLabel", item.sourceLabel)
+        put("tvReleaseStatus", item.tvReleaseStatus.name)
+        put("digitalReleaseDate", item.digitalReleaseDate ?: JSONObject.NULL)
     }
 
     private fun atomicWrite(target: File, content: String) {

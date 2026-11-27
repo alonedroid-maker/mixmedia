@@ -5,9 +5,7 @@ import com.example.download.DownloadSaveLocation
 import com.example.download.DownloadSegment
 import com.example.download.DownloadStatus
 import com.example.download.DownloadTask
-import com.example.download.EnqueueResult
 import com.example.download.QueueConcurrency
-import com.example.network.CurlRedirectResolver
 import com.example.network.VideoLinkExtractor
 import java.io.File
 import java.io.FileOutputStream
@@ -37,12 +35,16 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
+sealed interface DesktopEnqueueResult {
+    data class Started(val task: DownloadTask) : DesktopEnqueueResult
+    data class Conflict(val existing: DownloadTask) : DesktopEnqueueResult
+}
+
 /**
  * Pure-JVM multi-connection HTTP download manager for Windows 7..11+ Desktop.
  */
 class DesktopDownloadEngine(
     private val persistenceStore: DesktopPersistence,
-    private val resolver: CurlRedirectResolver = CurlRedirectResolver(),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val downloadPersistence = DownloadPersistence(persistenceStore.downloadsFile)
@@ -68,7 +70,7 @@ class DesktopDownloadEngine(
 
     private val _tasks = MutableStateFlow(
         downloadPersistence.loadTasks().map { task ->
-            if (task.status == DownloadStatus.DOWNLOADING || task.status == DownloadStatus.RESOLVING) {
+            if (task.status == DownloadStatus.DOWNLOADING || task.status == DownloadStatus.CONNECTING) {
                 task.copy(status = DownloadStatus.PAUSED, speedBytesPerSec = 0L)
             } else {
                 task
@@ -119,7 +121,7 @@ class DesktopDownloadEngine(
     }
 
     fun findExistingConflict(url: String, fileName: String): DownloadTask? {
-        val sanitized = VideoLinkExtractor.sanitizeFileName(fileName)
+        val sanitized = sanitizeFileName(fileName)
         return _tasks.value.firstOrNull {
             it.url == url || it.fileName.equals(sanitized, ignoreCase = true)
         }
@@ -128,56 +130,55 @@ class DesktopDownloadEngine(
     fun enqueueDownload(
         url: String,
         suggestedFileName: String,
-        mimeType: String? = null,
         customUserAgent: String? = null,
         allowDuplicateRename: Boolean = false,
         replaceExistingId: String? = null,
-    ): EnqueueResult {
+    ): DesktopEnqueueResult {
         val parsed = url.trim().toHttpUrlOrNull()
+        val sanitized = sanitizeFileName(suggestedFileName)
         if (parsed == null || (parsed.scheme != "http" && parsed.scheme != "https")) {
             val failed = DownloadTask(
                 id = UUID.randomUUID().toString(),
                 url = url,
-                fileName = VideoLinkExtractor.sanitizeFileName(suggestedFileName),
+                fileName = sanitized,
                 status = DownloadStatus.FAILED,
                 errorMessage = "Only HTTP/HTTPS URLs are supported.",
             )
-            return EnqueueResult.Started(failed)
+            return DesktopEnqueueResult.Started(failed)
         }
 
         if (replaceExistingId != null) {
             removeTask(replaceExistingId)
         } else if (!allowDuplicateRename) {
-            findExistingConflict(parsed.toString(), suggestedFileName)?.let {
-                return EnqueueResult.Conflict(it)
+            findExistingConflict(parsed.toString(), sanitized)?.let {
+                return DesktopEnqueueResult.Conflict(it)
             }
         }
 
         val targetDir = File(_saveLocation.value.displayPath).apply { mkdirs() }
-        val uniqueName = makeUniqueFileName(targetDir, VideoLinkExtractor.sanitizeFileName(suggestedFileName))
+        val uniqueName = makeUniqueFileName(targetDir, sanitized)
         val partFile = File(stagingDir, "${UUID.randomUUID()}.part")
         val task = DownloadTask(
             id = UUID.randomUUID().toString(),
             url = parsed.toString(),
             fileName = uniqueName,
-            mimeType = mimeType ?: VideoLinkExtractor.guessMimeType(uniqueName),
+            extension = VideoLinkExtractor.extractExtension(parsed.toString(), uniqueName),
             status = DownloadStatus.QUEUED,
-            threadCount = _connectionsPerDownload.value,
-            localPartPath = partFile.absolutePath,
-            destinationLabel = targetDir.absolutePath,
+            connectionCount = _connectionsPerDownload.value,
+            partFilePath = partFile.absolutePath,
             customUserAgent = customUserAgent,
         )
         _tasks.update { listOf(task) + it }
         persist()
         scheduleNextFromQueue()
-        return EnqueueResult.Started(task)
+        return DesktopEnqueueResult.Started(task)
     }
 
     fun pauseTask(taskId: String) {
         activeJobs.remove(taskId)?.cancel()
         updateTask(taskId) {
             if (it.status == DownloadStatus.COMPLETED) it
-            else it.copy(status = DownloadStatus.PAUSED, speedBytesPerSec = 0L)
+            else it.copy(status = DownloadStatus.PAUSED, speedBytesPerSec = 0L, etaSeconds = null)
         }
         scheduleNextFromQueue()
     }
@@ -206,7 +207,7 @@ class DesktopDownloadEngine(
     fun removeTask(taskId: String) {
         activeJobs.remove(taskId)?.cancel()
         val existing = _tasks.value.firstOrNull { it.id == taskId }
-        existing?.localPartPath?.let { path -> runCatching { File(path).delete() } }
+        existing?.partFilePath?.let { path -> runCatching { File(path).delete() } }
         _tasks.update { list -> list.filterNot { it.id == taskId } }
         persist()
         scheduleNextFromQueue()
@@ -214,16 +215,16 @@ class DesktopDownloadEngine(
 
     fun clearFinished() {
         _tasks.update { list ->
-            list.filterNot { it.status == DownloadStatus.COMPLETED || it.status == DownloadStatus.CANCELLED }
+            list.filterNot { it.status == DownloadStatus.COMPLETED }
         }
         persist()
     }
 
     fun pauseAll() {
-        _tasks.value.filter { it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.QUEUED }
+        _tasks.value.filter { it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.CONNECTING || it.status == DownloadStatus.QUEUED }
             .forEach { task ->
                 activeJobs.remove(task.id)?.cancel()
-                updateTask(task.id) { it.copy(status = DownloadStatus.PAUSED, speedBytesPerSec = 0L) }
+                updateTask(task.id) { it.copy(status = DownloadStatus.PAUSED, speedBytesPerSec = 0L, etaSeconds = null) }
             }
     }
 
@@ -240,9 +241,9 @@ class DesktopDownloadEngine(
     }
 
     private fun scheduleNextFromQueue() {
-        val limit = _concurrencyLimit.value.maxActive
+        val limit = _concurrencyLimit.value.maxConcurrent
         val activeCount = _tasks.value.count {
-            it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.RESOLVING
+            it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.CONNECTING
         }
         val slots = (limit - activeCount).coerceAtLeast(0)
         if (slots == 0) return
@@ -258,16 +259,17 @@ class DesktopDownloadEngine(
     private suspend fun runDownloadTask(taskId: String) {
         try {
             val initial = _tasks.value.firstOrNull { it.id == taskId } ?: return
-            updateTask(taskId) { it.copy(status = DownloadStatus.RESOLVING, errorMessage = null) }
+            updateTask(taskId) { it.copy(status = DownloadStatus.CONNECTING, errorMessage = null) }
 
             val targetUrl = initial.url
             val probe = probeDownloadHeaders(targetUrl, initial.customUserAgent)
             val totalBytes = probe.contentLength
             val supportsRange = probe.acceptsRange && totalBytes > 512 * 1024L
-            val partFile = File(initial.localPartPath).apply { parentFile?.mkdirs() }
-            val ua = initial.customUserAgent ?: CurlRedirectResolver.DESKTOP_UA
+            val partPath = initial.partFilePath ?: File(stagingDir, "${initial.id}.part").absolutePath
+            val partFile = File(partPath).apply { parentFile?.mkdirs() }
+            val ua = initial.customUserAgent ?: DEFAULT_USER_AGENT
 
-            val threads = if (supportsRange) initial.threadCount.coerceIn(1, 8) else 1
+            val threads = if (supportsRange) initial.connectionCount.coerceIn(1, 8) else 1
             val segments = if (initial.segments.size == threads && initial.totalBytes == totalBytes && totalBytes > 0L) {
                 initial.segments
             } else if (supportsRange && threads > 1) {
@@ -288,7 +290,7 @@ class DesktopDownloadEngine(
                     totalBytes = totalBytes,
                     supportsRange = supportsRange,
                     segments = segments,
-                    mimeType = probe.mimeType ?: it.mimeType,
+                    partFilePath = partFile.absolutePath,
                 )
             }
 
@@ -309,6 +311,10 @@ class DesktopDownloadEngine(
                         prevBytes = nowBytes
                         prevTs = nowTs
 
+                        val eta = if (speed > 0L && totalBytes > nowBytes) {
+                            (totalBytes - nowBytes) / speed
+                        } else null
+
                         val updatedSegs = segments.map { seg ->
                             seg.copy(downloadedBytes = segmentProgress[seg.index] ?: seg.downloadedBytes)
                         }
@@ -317,6 +323,7 @@ class DesktopDownloadEngine(
                             else cur.copy(
                                 downloadedBytes = nowBytes,
                                 speedBytesPerSec = speed,
+                                etaSeconds = eta,
                                 segments = updatedSegs,
                             )
                         }
@@ -345,7 +352,7 @@ class DesktopDownloadEngine(
                             userAgent = ua,
                             partFile = partFile,
                             resumeOffset = if (supportsRange) partFile.length() else 0L,
-                            onDelta = { delta, total ->
+                            onDelta = { _, total ->
                                 totalDownloaded.set(total)
                                 segmentProgress[0] = total
                             },
@@ -371,10 +378,10 @@ class DesktopDownloadEngine(
                     downloadedBytes = finalSize,
                     totalBytes = if (it.totalBytes > 0L) it.totalBytes else finalSize,
                     speedBytesPerSec = 0L,
-                    savedLocationLabel = destFile.absolutePath,
+                    etaSeconds = 0L,
+                    localFilePath = destFile.absolutePath,
                     publicUriString = destFile.toURI().toString(),
-                    localPartPath = destFile.absolutePath,
-                    completedAt = System.currentTimeMillis(),
+                    partFilePath = destFile.absolutePath,
                 )
             }
         } catch (_: CancellationException) {
@@ -384,6 +391,7 @@ class DesktopDownloadEngine(
                 it.copy(
                     status = DownloadStatus.FAILED,
                     speedBytesPerSec = 0L,
+                    etaSeconds = null,
                     errorMessage = e.localizedMessage?.take(140) ?: e.javaClass.simpleName,
                 )
             }
@@ -467,20 +475,18 @@ class DesktopDownloadEngine(
     private data class HeaderProbe(
         val contentLength: Long,
         val acceptsRange: Boolean,
-        val mimeType: String?,
     )
 
     private fun probeDownloadHeaders(url: String, customUa: String?): HeaderProbe {
-        val ua = customUa ?: CurlRedirectResolver.DESKTOP_UA
+        val ua = customUa ?: DEFAULT_USER_AGENT
         runCatching {
             val headReq = Request.Builder().url(url).head().header("User-Agent", ua).build()
             client.newCall(headReq).execute().use { resp ->
                 if (resp.isSuccessful) {
                     val len = resp.header("Content-Length")?.toLongOrNull() ?: -1L
                     val accepts = resp.header("Accept-Ranges")?.contains("bytes", ignoreCase = true) == true
-                    val mime = resp.header("Content-Type")?.substringBefore(';')?.trim()
                     if (len > 0L || accepts) {
-                        return HeaderProbe(len, accepts, mime)
+                        return HeaderProbe(len, accepts)
                     }
                 }
             }
@@ -497,10 +503,9 @@ class DesktopDownloadEngine(
                     ?: resp.header("Content-Length")?.toLongOrNull()
                     ?: -1L
                 val accepts = resp.code == 206 || cr != null
-                val mime = resp.header("Content-Type")?.substringBefore(';')?.trim()
-                HeaderProbe(total, accepts, mime)
+                HeaderProbe(total, accepts)
             }
-        }.getOrElse { HeaderProbe(-1L, false, null) }
+        }.getOrElse { HeaderProbe(-1L, false) }
     }
 
     private fun buildSegments(totalBytes: Long, count: Int): List<DownloadSegment> {
@@ -512,8 +517,13 @@ class DesktopDownloadEngine(
         }
     }
 
+    private fun sanitizeFileName(raw: String): String {
+        val cleaned = raw.trim().replace(Regex("[\\\\/:*?\"<>|]"), "_").trim('.')
+        return cleaned.ifBlank { "mediax_download.mp4" }
+    }
+
     private fun makeUniqueFileName(dir: File, desired: String): String {
-        val clean = desired.ifBlank { "mediax_download.mp4" }
+        val clean = sanitizeFileName(desired)
         var candidate = File(dir, clean)
         if (!candidate.exists()) return clean
         val dot = clean.lastIndexOf('.')
@@ -535,5 +545,10 @@ class DesktopDownloadEngine(
 
     private fun persist() {
         downloadPersistence.saveTasks(_tasks.value)
+    }
+
+    companion object {
+        private const val DEFAULT_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     }
 }

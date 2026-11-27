@@ -92,7 +92,7 @@ jobs:
 
       - name: Audit Client Repo for Zero Hardcoded TMDB Secrets
         run: |
-          if grep -rnE "eyJhbGciOi|TMDB_API_READ_ACCESS_TOKEN=[^M]|TMDB_API_KEY=[^M]" app/ .env.example gradle/ 2>/dev/null; then
+          if grep -rnE --exclude-dir=build --exclude-dir=.gradle "eyJhbGciOi|TMDB_API_READ_ACCESS_TOKEN=[^M]|TMDB_API_KEY=[^M]" app/ core/ desktop/ .env.example gradle/ 2>/dev/null; then
             echo "ERROR: Hardcoded TMDB credentials detected in tracked client files." >&2
             exit 1
           fi

@@ -441,7 +441,7 @@ class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
 
         val joined = URLEncoder.encode(pageTitles.joinToString("|"), "UTF-8")
         val detailBody = getString(
-            "https://fa.wikipedia.org/w/api.php?action=query&titles=$joined&prop=langlinks|extracts|pageprops&lllang=en&exintro=1&explaintext=1&exlimit=max&redirects=1&format=json"
+            "https://fa.wikipedia.org/w/api.php?action=query&titles=$joined&prop=langlinks|extracts|pageprops&ppprop=wikibase_item|disambiguation&lllang=en&exintro=1&explaintext=1&exlimit=max&redirects=1&format=json"
         ) ?: return emptyList()
 
         return try {
@@ -450,14 +450,18 @@ class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
                 val keys = pages.keys()
                 while (keys.hasNext()) {
                     val page = pages.optJSONObject(keys.next()) ?: continue
+                    val pageProps = page.optJSONObject("pageprops")
+                    if (pageProps?.has("disambiguation") == true) continue
                     val faTitle = page.optString("title").takeIf { it.isNotBlank() }
                     val enTitleRaw = page.optJSONArray("langlinks")?.optJSONObject(0)?.optString("*")
                     val enClean = enTitleRaw?.let { cleanWikipediaTitle(it) }
-                    val extract = page.optString("extract").takeIf { it.isNotBlank() }?.take(500)
-                    val wikidataId = page.optJSONObject("pageprops")?.optString("wikibase_item")
+                    val rawExtract = page.optString("extract").takeIf { it.isNotBlank() }
+                    val verifiedExtract = rawExtract?.let { cleanWikipediaExtract(it, maxChars = 650) }
+                        ?.takeIf { isValidPersianMediaExtract(it, requireMediaKeywords = true) }
+                    val wikidataId = pageProps?.optString("wikibase_item")
                         ?.takeIf { it.startsWith("Q") }
                     if (enClean != null || faTitle != null) {
-                        add(WikipediaBridgeHit(faTitle, enClean, extract, wikidataId))
+                        add(WikipediaBridgeHit(faTitle, enClean, verifiedExtract, wikidataId))
                     }
                 }
             }
@@ -604,39 +608,108 @@ class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
 
     /**
      * Fetches zero-key movie/TV metadata from Wikidata + Wikipedia (Director, Cast, Runtime, Date, Country, Genres, Persian title/overview).
+     * Strictly anchors Persian Wikipedia lookup to a validated Wikidata screen-work entity (via IMDb ID or verified film/TV EN match + sitelink)
+     * so unrelated Persian Wikipedia articles are never surfaced.
      */
     suspend fun fetchWikidataAndWikipediaEnrichment(
         title: String,
         imdbId: String?,
         knownWikidataId: String? = null,
+        mediaType: MediaType = MediaType.MOVIE,
+        releaseYear: Int? = null,
+        originalTitle: String? = null,
     ): WikidataEnrichment? = coroutineScope {
-        val enWikiSearchTitleDeferred = async { findWikipediaTitleAndSummary(title, "en") }
-        val faWikiSearchTitleDeferred = async { findWikipediaTitleAndSummary(title, "fa") }
+        val cleanImdb = imdbId?.trim()?.takeIf { it.startsWith("tt") }
+        val verifiedEnCandidate = if (knownWikidataId == null && cleanImdb == null) {
+            findVerifiedEnglishWikipediaMatch(
+                title = title,
+                originalTitle = originalTitle,
+                mediaType = mediaType,
+                releaseYear = releaseYear,
+            )
+        } else {
+            null
+        }
 
-        val enWiki = enWikiSearchTitleDeferred.await()
-        val faWiki = faWikiSearchTitleDeferred.await()
+        val qid = knownWikidataId?.takeIf { it.startsWith("Q") }
+            ?: cleanImdb?.let { findWikidataIdByImdb(it) }
+            ?: verifiedEnCandidate?.wikidataId
+            ?: findVerifiedWikidataEntityBySearch(
+                title = title,
+                originalTitle = originalTitle,
+                mediaType = mediaType,
+                releaseYear = releaseYear,
+            )
 
-        val qid = knownWikidataId
-            ?: enWiki?.wikidataId
-            ?: faWiki?.wikidataId
-            ?: findWikidataIdByImdbOrTitle(imdbId, title)
+        val entityClaims = qid?.let {
+            fetchWikidataEntityDetails(
+                qid = it,
+                expectedImdbId = cleanImdb,
+                mediaType = mediaType,
+                expectedYear = releaseYear,
+            )
+        }
 
-        val entityClaims = qid?.let { fetchWikidataEntityDetails(it) }
+        if (entityClaims == null) {
+            // If entity validation failed or no verified entity matched, still allow verified English extract if matched
+            val safeEn = verifiedEnCandidate?.extract
+                ?.let { cleanWikipediaExtract(it, maxChars = 650) }
+                ?.takeIf { isValidMediaOverviewExtract(it, isPersian = false) }
+            if (safeEn == null) return@coroutineScope null
+            return@coroutineScope WikidataEnrichment(
+                wikidataId = null,
+                englishOverview = safeEn,
+                persianTitle = null,
+                persianOverview = null,
+                directors = emptyList(),
+                cast = emptyList(),
+                genres = emptyList(),
+                runtimeMinutes = null,
+                releaseDate = null,
+                country = null,
+                originalLanguage = null,
+                imdbId = cleanImdb,
+            )
+        }
 
-        if (enWiki == null && faWiki == null && entityClaims == null) return@coroutineScope null
+        val faSummaryDef = async {
+            val faSiteTitle = entityClaims.faWikiTitle ?: return@async null
+            val summary = fetchExactWikipediaSummary(faSiteTitle, "fa") ?: return@async null
+            summary.extract
+                ?.let { cleanWikipediaExtract(it, maxChars = 700) }
+                ?.takeIf {
+                    isValidPersianMediaExtract(
+                        extract = it,
+                        releaseYear = releaseYear,
+                        requireMediaKeywords = (entityClaims.imdbId == null),
+                    )
+                }
+        }
+        val enSummaryDef = async {
+            if (verifiedEnCandidate != null && verifiedEnCandidate.wikidataId == qid && !verifiedEnCandidate.extract.isNullOrBlank()) {
+                return@async cleanWikipediaExtract(verifiedEnCandidate.extract, maxChars = 650)
+            }
+            val enSiteTitle = entityClaims.enWikiTitle ?: return@async null
+            fetchExactWikipediaSummary(enSiteTitle, "en")?.extract
+                ?.let { cleanWikipediaExtract(it, maxChars = 650) }
+        }
+
+        val faOverview = faSummaryDef.await()
+        val enOverview = enSummaryDef.await()
+
         WikidataEnrichment(
             wikidataId = qid,
-            englishOverview = enWiki?.extract,
-            persianTitle = entityClaims?.persianLabel ?: faWiki?.title?.let { cleanWikipediaTitle(it) },
-            persianOverview = faWiki?.extract,
-            directors = entityClaims?.directors.orEmpty(),
-            cast = entityClaims?.cast.orEmpty(),
-            genres = entityClaims?.genres.orEmpty(),
-            runtimeMinutes = entityClaims?.runtimeMinutes,
-            releaseDate = entityClaims?.releaseDate,
-            country = entityClaims?.country,
-            originalLanguage = entityClaims?.originalLanguage,
-            imdbId = entityClaims?.imdbId ?: imdbId,
+            englishOverview = enOverview,
+            persianTitle = entityClaims.persianLabel ?: entityClaims.faWikiTitle?.let { cleanWikipediaTitle(it) },
+            persianOverview = faOverview,
+            directors = entityClaims.directors,
+            cast = entityClaims.cast,
+            genres = entityClaims.genres,
+            runtimeMinutes = entityClaims.runtimeMinutes,
+            releaseDate = entityClaims.releaseDate,
+            country = entityClaims.country,
+            originalLanguage = entityClaims.originalLanguage,
+            imdbId = entityClaims.imdbId ?: cleanImdb,
         )
     }
 
@@ -646,65 +719,189 @@ class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
         val wikidataId: String?,
     )
 
-    private fun findWikipediaTitleAndSummary(title: String, lang: String): WikiSummary? {
-        val encoded = URLEncoder.encode(title.trim(), "UTF-8")
-        val searchJson = getString(
-            "https://$lang.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded&format=json&utf8=1&srlimit=3"
-        ) ?: return null
-        val pageTitle = try {
-            val arr = JSONObject(searchJson).optJSONObject("query")?.optJSONArray("search") ?: return null
-            val titles = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("title") }
-            titles.firstOrNull {
-                it.contains("film", ignoreCase = true) || it.contains("series", ignoreCase = true) ||
-                    it.contains("فیلم") || it.contains("مجموعه") || it.contains("سریال")
-            } ?: titles.firstOrNull()
-        } catch (_: Exception) {
-            null
-        } ?: return null
-
+    private fun fetchExactWikipediaSummary(pageTitle: String, lang: String): WikiSummary? {
+        val cleanTitle = pageTitle.trim()
+        if (cleanTitle.isEmpty()) return null
         val detailJson = getString(
-            "https://$lang.wikipedia.org/w/api.php?action=query&titles=${URLEncoder.encode(pageTitle, "UTF-8")}&prop=extracts|pageprops&exintro=1&explaintext=1&redirects=1&format=json"
+            "https://$lang.wikipedia.org/w/api.php?action=query&titles=${URLEncoder.encode(cleanTitle, "UTF-8")}&prop=extracts|pageprops&ppprop=wikibase_item|disambiguation&exintro=1&explaintext=1&redirects=1&format=json"
         ) ?: return null
 
         return try {
             val pages = JSONObject(detailJson).optJSONObject("query")?.optJSONObject("pages") ?: return null
             val key = pages.keys().asSequence().firstOrNull() ?: return null
+            if (key == "-1") return null
             val page = pages.optJSONObject(key) ?: return null
+            val pageProps = page.optJSONObject("pageprops")
+            if (pageProps?.has("disambiguation") == true) return null
             WikiSummary(
-                title = page.optString("title", pageTitle),
-                extract = page.optString("extract").takeIf { it.isNotBlank() }?.take(600),
-                wikidataId = page.optJSONObject("pageprops")?.optString("wikibase_item")?.takeIf { it.startsWith("Q") },
+                title = page.optString("title", cleanTitle),
+                extract = page.optString("extract").takeIf { it.isNotBlank() },
+                wikidataId = pageProps?.optString("wikibase_item")?.takeIf { it.startsWith("Q") },
             )
         } catch (_: Exception) {
             null
         }
     }
 
-    private fun findWikidataIdByImdbOrTitle(imdbId: String?, title: String): String? {
-        val search = imdbId?.takeIf { it.startsWith("tt") } ?: title
-        val encoded = URLEncoder.encode(search, "UTF-8")
-        val url = if (imdbId != null) {
-            "https://www.wikidata.org/w/api.php?action=query&list=search&srsearch=haswbstatement:P345=$encoded&format=json&srlimit=1"
-        } else {
-            "https://www.wikidata.org/w/api.php?action=wbsearchentities&search=$encoded&language=en&format=json&limit=2"
+    private fun findVerifiedEnglishWikipediaMatch(
+        title: String,
+        originalTitle: String?,
+        mediaType: MediaType,
+        releaseYear: Int?,
+    ): WikiSummary? {
+        val typeHint = if (mediaType == MediaType.TV) "TV series" else "film"
+        val queries = linkedSetOf<String>()
+        val cleanPrimary = title.trim()
+        val cleanOrig = originalTitle?.trim()?.takeIf { it.isNotBlank() && !it.equals(cleanPrimary, ignoreCase = true) }
+        if (cleanPrimary.isNotEmpty()) {
+            if (releaseYear != null) queries.add("$cleanPrimary $releaseYear $typeHint")
+            queries.add("$cleanPrimary $typeHint")
         }
-        val body = getString(url) ?: return null
-        return try {
-            val root = JSONObject(body)
-            if (imdbId != null) {
-                root.optJSONObject("query")?.optJSONArray("search")?.optJSONObject(0)?.optString("title")
-                    ?.takeIf { it.startsWith("Q") }
-            } else {
-                root.optJSONArray("search")?.optJSONObject(0)?.optString("id")
-                    ?.takeIf { it.startsWith("Q") }
+        if (cleanOrig != null) {
+            if (releaseYear != null) queries.add("$cleanOrig $releaseYear $typeHint")
+            queries.add("$cleanOrig $typeHint")
+        }
+
+        val candidateTitles = linkedSetOf<String>()
+        for (q in queries.take(3)) {
+            val encoded = URLEncoder.encode(q, "UTF-8")
+            val searchJson = getString(
+                "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded&format=json&utf8=1&srlimit=4"
+            ) ?: continue
+            val arr = runCatching {
+                JSONObject(searchJson).optJSONObject("query")?.optJSONArray("search")
+            }.getOrNull() ?: continue
+            for (i in 0 until arr.length()) {
+                val t = arr.optJSONObject(i)?.optString("title")?.takeIf { it.isNotBlank() } ?: continue
+                candidateTitles.add(t)
             }
+            if (candidateTitles.size >= 4) break
+        }
+        if (candidateTitles.isEmpty()) return null
+
+        val joined = URLEncoder.encode(candidateTitles.take(5).joinToString("|"), "UTF-8")
+        val detailJson = getString(
+            "https://en.wikipedia.org/w/api.php?action=query&titles=$joined&prop=extracts|pageprops&ppprop=wikibase_item|disambiguation&exintro=1&explaintext=1&exlimit=max&redirects=1&format=json"
+        ) ?: return null
+
+        return try {
+            val pages = JSONObject(detailJson).optJSONObject("query")?.optJSONObject("pages") ?: return null
+            val normPrimary = FuzzyTitleMatcher.normalizeText(cleanPrimary)
+            val normOrig = cleanOrig?.let { FuzzyTitleMatcher.normalizeText(it) }
+
+            var bestCandidate: Pair<Int, WikiSummary>? = null
+            val keys = pages.keys()
+            while (keys.hasNext()) {
+                val page = pages.optJSONObject(keys.next()) ?: continue
+                val pageProps = page.optJSONObject("pageprops")
+                if (pageProps?.has("disambiguation") == true) continue
+                val pageTitle = page.optString("title").takeIf { it.isNotBlank() } ?: continue
+                val extract = page.optString("extract").takeIf { it.isNotBlank() } ?: continue
+                val qid = pageProps?.optString("wikibase_item")?.takeIf { it.startsWith("Q") }
+                if (!isValidMediaOverviewExtract(extract, isPersian = false)) continue
+
+                val cleanPageTitle = cleanWikipediaTitle(pageTitle)
+                val normPageTitle = FuzzyTitleMatcher.normalizeText(cleanPageTitle)
+                val titleSim = maxOf(
+                    FuzzyTitleMatcher.stringSimilarity(normPageTitle, normPrimary),
+                    normOrig?.let { FuzzyTitleMatcher.stringSimilarity(normPageTitle, it) } ?: 0.0,
+                )
+                val exactMatch = normPageTitle == normPrimary || (normOrig != null && normPageTitle == normOrig)
+                if (!exactMatch && titleSim < 0.72) continue
+
+                val lowerTitle = pageTitle.lowercase()
+                val lowerLead = extract.take(280).lowercase()
+                val isFilmPage = lowerTitle.contains("film") || lowerLead.contains(" film") || lowerLead.contains("movie")
+                val isTvPage = lowerTitle.contains("tv series") || lowerTitle.contains("television") ||
+                    lowerLead.contains("television series") || lowerLead.contains("tv series") || lowerLead.contains("miniseries")
+                if (mediaType == MediaType.MOVIE && !isFilmPage) continue
+                if (mediaType == MediaType.TV && !isTvPage) continue
+
+                if (releaseYear != null) {
+                    val mentionedYears = YEAR_REGEX.findAll(extract.take(260))
+                        .mapNotNull { it.value.toIntOrNull() }
+                        .toList()
+                    if (mentionedYears.isNotEmpty() && mentionedYears.none { kotlin.math.abs(it - releaseYear) <= 1 }) {
+                        continue
+                    }
+                }
+
+                var score = (titleSim * 100).toInt()
+                if (exactMatch) score += 40
+                if (releaseYear != null && extract.take(260).contains(releaseYear.toString())) score += 30
+                if (qid != null) score += 10
+                val summary = WikiSummary(pageTitle, extract, qid)
+                if (bestCandidate == null || score > bestCandidate.first) {
+                    bestCandidate = score to summary
+                }
+            }
+            bestCandidate?.second
         } catch (_: Exception) {
             null
         }
     }
 
-    private data class EntityClaims(
+    private fun findWikidataIdByImdb(imdbId: String): String? {
+        val clean = imdbId.trim().takeIf { it.startsWith("tt") } ?: return null
+        val encoded = URLEncoder.encode(clean, "UTF-8")
+        val body = getString(
+            "https://www.wikidata.org/w/api.php?action=query&list=search&srsearch=haswbstatement:P345=$encoded&format=json&srlimit=2"
+        ) ?: return null
+        return try {
+            JSONObject(body)
+                .optJSONObject("query")
+                ?.optJSONArray("search")
+                ?.optJSONObject(0)
+                ?.optString("title")
+                ?.takeIf { it.startsWith("Q") }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun findVerifiedWikidataEntityBySearch(
+        title: String,
+        originalTitle: String?,
+        mediaType: MediaType,
+        releaseYear: Int?,
+    ): String? {
+        val candidates = listOfNotNull(
+            title.trim().takeIf { it.isNotBlank() },
+            originalTitle?.trim()?.takeIf { it.isNotBlank() && !it.equals(title.trim(), ignoreCase = true) },
+        )
+        for (term in candidates) {
+            val encoded = URLEncoder.encode(term, "UTF-8")
+            val body = getString(
+                "https://www.wikidata.org/w/api.php?action=wbsearchentities&search=$encoded&language=en&uselang=en&type=item&limit=5&format=json"
+            ) ?: continue
+            val arr = runCatching { JSONObject(body).optJSONArray("search") }.getOrNull() ?: continue
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val id = item.optString("id").takeIf { it.startsWith("Q") } ?: continue
+                val desc = item.optString("description", "").lowercase()
+                if (desc.contains("disambiguation")) continue
+                val looksLikeRightType = if (mediaType == MediaType.TV) {
+                    desc.contains("television") || desc.contains("tv series") || desc.contains("miniseries") || desc.contains("anime")
+                } else {
+                    desc.contains("film") || desc.contains("movie")
+                }
+                if (!looksLikeRightType) continue
+                if (releaseYear != null) {
+                    val years = YEAR_REGEX.findAll(desc).mapNotNull { it.value.toIntOrNull() }.toList()
+                    if (years.isNotEmpty() && years.none { kotlin.math.abs(it - releaseYear) <= 1 }) {
+                        continue
+                    }
+                }
+                return id
+            }
+        }
+        return null
+    }
+
+    data class EntityClaims(
         val persianLabel: String?,
+        val faWikiTitle: String?,
+        val enWikiTitle: String?,
         val directors: List<String>,
         val cast: List<String>,
         val genres: List<String>,
@@ -715,15 +912,60 @@ class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
         val imdbId: String?,
     )
 
-    private fun fetchWikidataEntityDetails(qid: String): EntityClaims? {
+    private fun fetchWikidataEntityDetails(
+        qid: String,
+        expectedImdbId: String?,
+        mediaType: MediaType,
+        expectedYear: Int?,
+    ): EntityClaims? {
         val body = getString(
-            "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${URLEncoder.encode(qid, "UTF-8")}&props=claims|labels&languages=en|fa&format=json"
+            "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${URLEncoder.encode(qid, "UTF-8")}&props=claims|labels|descriptions|sitelinks&languages=en|fa&sitefilter=enwiki|fawiki&format=json"
         ) ?: return null
+        return parseVerifiedWikidataEntityJson(
+            rawJson = body,
+            qid = qid,
+            expectedImdbId = expectedImdbId,
+            mediaType = mediaType,
+            expectedYear = expectedYear,
+        )
+    }
+
+    fun parseVerifiedWikidataEntityJson(
+        rawJson: String,
+        qid: String,
+        expectedImdbId: String?,
+        mediaType: MediaType,
+        expectedYear: Int?,
+        resolveClaimLabels: Boolean = true,
+    ): EntityClaims? {
         return try {
-            val entity = JSONObject(body).optJSONObject("entities")?.optJSONObject(qid) ?: return null
+            val entity = JSONObject(rawJson).optJSONObject("entities")?.optJSONObject(qid) ?: return null
             val labels = entity.optJSONObject("labels")
-            val persianLabel = labels?.optJSONObject("fa")?.optString("value")?.takeIf { it.isNotBlank() }
+            val descriptions = entity.optJSONObject("descriptions")
+            val sitelinks = entity.optJSONObject("sitelinks")
             val claims = entity.optJSONObject("claims") ?: return null
+
+            val enDesc = descriptions?.optJSONObject("en")?.optString("value").orEmpty()
+            val faDesc = descriptions?.optJSONObject("fa")?.optString("value").orEmpty()
+            if (enDesc.contains("disambiguation", ignoreCase = true) ||
+                faDesc.contains("ابهام‌زدایی")
+            ) {
+                return null
+            }
+
+            val instanceOfIds = extractClaimItemIds(claims, "P31", limit = 12).toSet()
+            if ((instanceOfIds intersect DISAMBIGUATION_QIDS).isNotEmpty()) {
+                return null
+            }
+
+            val imdbId = claims.optJSONArray("P345")?.optJSONObject(0)
+                ?.optJSONObject("mainsnak")?.optJSONObject("datavalue")
+                ?.optString("value")?.takeIf { it.startsWith("tt") }
+
+            val imdbLocked = expectedImdbId != null && imdbId != null
+            if (imdbLocked && !expectedImdbId.equals(imdbId, ignoreCase = true)) {
+                return null
+            }
 
             val directorIds = extractClaimItemIds(claims, "P57", limit = 3)
             val castIds = extractClaimItemIds(claims, "P161", limit = 8)
@@ -731,7 +973,38 @@ class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
             val countryIds = extractClaimItemIds(claims, "P495", limit = 1)
             val langIds = extractClaimItemIds(claims, "P364", limit = 1)
 
-            val allReferencedIds = (directorIds + castIds + genreIds + countryIds + langIds).distinct()
+            val hasScreenWorkType = (instanceOfIds intersect SCREEN_WORK_QIDS).isNotEmpty()
+            val hasMediaDesc = hasMediaDescription(enDesc, faDesc)
+            val hasMediaClaims = directorIds.isNotEmpty() || castIds.isNotEmpty() || imdbId != null
+            if (!imdbLocked && !hasScreenWorkType && !hasMediaDesc && !hasMediaClaims) {
+                return null
+            }
+            if (!imdbLocked && (instanceOfIds intersect NON_MEDIA_QIDS).isNotEmpty() && !hasScreenWorkType) {
+                return null
+            }
+
+            // Guard against matching a film entity when searching for a TV series with the same title (or vice versa)
+            if (!imdbLocked) {
+                val isFilmEntity = (instanceOfIds intersect FILM_ONLY_QIDS).isNotEmpty()
+                val isTvEntity = (instanceOfIds intersect TV_SERIES_QIDS).isNotEmpty()
+                if (mediaType == MediaType.MOVIE && isTvEntity && !isFilmEntity) return null
+                if (mediaType == MediaType.TV && isFilmEntity && !isTvEntity) return null
+            }
+
+            val releaseDate = extractWikidataDateClaim(claims, "P577")
+                ?: extractWikidataDateClaim(claims, "P580")
+            val entityYear = releaseDate?.take(4)?.toIntOrNull()
+            if (!imdbLocked && expectedYear != null && entityYear != null &&
+                kotlin.math.abs(entityYear - expectedYear) > 2
+            ) {
+                return null
+            }
+
+            val allReferencedIds = if (resolveClaimLabels) {
+                (directorIds + castIds + genreIds + countryIds + langIds).distinct()
+            } else {
+                emptyList()
+            }
             val resolvedLabels = if (allReferencedIds.isNotEmpty()) {
                 fetchWikidataLabels(allReferencedIds.take(25))
             } else {
@@ -743,18 +1016,14 @@ class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
                 ?.optJSONObject("value")?.optString("amount")
                 ?.removePrefix("+")?.toDoubleOrNull()?.toInt()?.takeIf { it > 0 }
 
-            val releaseDate = claims.optJSONArray("P577")?.optJSONObject(0)
-                ?.optJSONObject("mainsnak")?.optJSONObject("datavalue")
-                ?.optJSONObject("value")?.optString("time")
-                ?.removePrefix("+")?.substringBefore("T")
-                ?.takeIf { it.length >= 4 }
-
-            val imdbId = claims.optJSONArray("P345")?.optJSONObject(0)
-                ?.optJSONObject("mainsnak")?.optJSONObject("datavalue")
-                ?.optString("value")?.takeIf { it.startsWith("tt") }
+            val persianLabel = labels?.optJSONObject("fa")?.optString("value")?.takeIf { it.isNotBlank() }
+            val faWikiTitle = sitelinks?.optJSONObject("fawiki")?.optString("title")?.takeIf { it.isNotBlank() }
+            val enWikiTitle = sitelinks?.optJSONObject("enwiki")?.optString("title")?.takeIf { it.isNotBlank() }
 
             EntityClaims(
                 persianLabel = persianLabel,
+                faWikiTitle = faWikiTitle,
+                enWikiTitle = enWikiTitle,
                 directors = directorIds.mapNotNull { resolvedLabels[it] },
                 cast = castIds.mapNotNull { resolvedLabels[it] },
                 genres = genreIds.mapNotNull { resolvedLabels[it] },
@@ -768,6 +1037,13 @@ class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
             null
         }
     }
+
+    private fun extractWikidataDateClaim(claims: JSONObject, property: String): String? =
+        claims.optJSONArray(property)?.optJSONObject(0)
+            ?.optJSONObject("mainsnak")?.optJSONObject("datavalue")
+            ?.optJSONObject("value")?.optString("time")
+            ?.removePrefix("+")?.substringBefore("T")
+            ?.takeIf { it.length >= 4 }
 
     private fun extractClaimItemIds(claims: JSONObject, property: String, limit: Int): List<String> {
         val arr = claims.optJSONArray(property) ?: return emptyList()
@@ -859,6 +1135,98 @@ class ZeroKeyMetadataEnricher(private val client: OkHttpClient) {
 
     companion object {
         private const val USER_AGENT = "MediaXAndroid/1.1 (https://github.com/alonedroid-maker/mixmedia)"
+
+        private val PERSIAN_CHAR_REGEX = Regex("[\\u0600-\\u06FF]")
+        private val YEAR_REGEX = Regex("\\b(19\\d{2}|20\\d{2})\\b")
+        private val WIKI_CITATIONS_REGEX = Regex("\\[[0-9\\u06F0-\\u06F9a-zA-Z\\u0600-\\u06FF\\s]{1,18}\\]")
+
+        private val DISAMBIGUATION_QIDS = setOf("Q4167410", "Q22808320", "Q13406463")
+        private val FILM_ONLY_QIDS = setOf(
+            "Q11424", "Q24862", "Q202866", "Q93204", "Q24856", "Q229390", "Q29168811", "Q20650540"
+        )
+        private val TV_SERIES_QIDS = setOf(
+            "Q5398426", "Q1259759", "Q506240", "Q15416", "Q21191270", "Q63952888", "Q581714", "Q526877"
+        )
+        private val SCREEN_WORK_QIDS = FILM_ONLY_QIDS + TV_SERIES_QIDS + setOf("Q1107")
+        private val NON_MEDIA_QIDS = setOf(
+            "Q5", "Q515", "Q6256", "Q7889", "Q482994", "Q7366", "Q16521", "Q7725634", "Q571"
+        )
+
+        private fun hasMediaDescription(enDesc: String, faDesc: String): Boolean {
+            val en = enDesc.lowercase()
+            val fa = faDesc.lowercase()
+            return en.contains("film") || en.contains("movie") || en.contains("television") ||
+                en.contains("tv series") || en.contains("miniseries") || en.contains("anime") ||
+                en.contains("documentary") ||
+                fa.contains("فیلم") || fa.contains("سریال") || fa.contains("مجموعه تلویزیونی") ||
+                fa.contains("انیمیشن") || fa.contains("مستند")
+        }
+
+        fun cleanWikipediaExtract(raw: String, maxChars: Int = 700): String {
+            val noCitations = raw
+                .replace(WIKI_CITATIONS_REGEX, "")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+            if (noCitations.length <= maxChars) return noCitations
+            val slice = noCitations.take(maxChars)
+            val lastStop = maxOf(
+                slice.lastIndexOf('.'),
+                slice.lastIndexOf('۔'),
+                slice.lastIndexOf('!'),
+                slice.lastIndexOf('؟'),
+            )
+            return if (lastStop >= maxChars / 2) {
+                slice.substring(0, lastStop + 1).trim()
+            } else {
+                slice.substringBeforeLast(' ', slice).trimEnd('.', '،', ' ') + "…"
+            }
+        }
+
+        fun isValidMediaOverviewExtract(raw: String?, isPersian: Boolean): Boolean {
+            val text = raw?.trim().orEmpty()
+            if (text.length < 25) return false
+            val lower = text.lowercase()
+            if (lower.contains("may refer to:") ||
+                lower.contains("may also refer to") ||
+                text.contains("ممکن است به یکی از موارد زیر") ||
+                text.contains("به یکی از موارد زیر اشاره داشته باشد") ||
+                text.contains("ابهام‌زدایی")
+            ) {
+                return false
+            }
+            if (isPersian) {
+                val faCount = PERSIAN_CHAR_REGEX.findAll(text).count()
+                if (faCount < 15) return false
+            }
+            return true
+        }
+
+        fun isValidPersianMediaExtract(
+            extract: String?,
+            releaseYear: Int? = null,
+            requireMediaKeywords: Boolean = false,
+        ): Boolean {
+            val text = extract?.trim().orEmpty()
+            if (!isValidMediaOverviewExtract(text, isPersian = true)) return false
+            if (releaseYear != null) {
+                val lead = text.take(260)
+                val yearsInLead = YEAR_REGEX.findAll(lead).mapNotNull { it.value.toIntOrNull() }.toList()
+                if (yearsInLead.isNotEmpty() && yearsInLead.none { kotlin.math.abs(it - releaseYear) <= 2 }) {
+                    return false
+                }
+            }
+            if (requireMediaKeywords) {
+                val lead = text.take(360)
+                val hasMediaHint = lead.contains("فیلم") || lead.contains("سینما") ||
+                    lead.contains("سریال") || lead.contains("مجموعه تلویزیونی") ||
+                    lead.contains("کارگردان") || lead.contains("نویسند") ||
+                    lead.contains("بازیگر") || lead.contains("انیمیشن") ||
+                    lead.contains("مستند") || lead.contains("پخش") ||
+                    lead.contains("اکران")
+                if (!hasMediaHint) return false
+            }
+            return true
+        }
     }
 }
 

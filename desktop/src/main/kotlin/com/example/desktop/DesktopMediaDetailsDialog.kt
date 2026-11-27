@@ -13,17 +13,17 @@ import com.example.media.SourceSearchTarget
 import com.example.media.SourceSiteConfig
 import com.example.media.WebSourceResult
 import com.example.ui.AppLanguage
-import com.example.ui.localized
+import com.example.ui.stringsFor
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.Font
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
 import java.io.File
 import javax.swing.Box
 import javax.swing.BoxLayout
-import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JDialog
 import javax.swing.JFrame
@@ -31,17 +31,14 @@ import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JTextArea
-import javax.swing.JTextField
 import javax.swing.SwingConstants
 import javax.swing.border.EmptyBorder
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
- * Windows Desktop dialog showing full Movie / TV details, watch providers,
- * seasons/episodes, favorites toggle, and live Source Discovery across configured websites.
+ * Windows Desktop dialog showing full Movie / TV details (including bilingual EN/FA summaries),
+ * watch providers, seasons/episodes, favorites toggle, and live Source Discovery across configured sites.
  */
 class DesktopMediaDetailsDialog(
     owner: JFrame,
@@ -59,12 +56,12 @@ class DesktopMediaDetailsDialog(
     private val onEnqueueDirectUrl: (String, String) -> Unit,
 ) : JDialog(owner, summary.title, true) {
 
-    private val strings = localized(language)
+    private val strings = stringsFor(language)
     private var isFavorite = isFavoriteInitial
     private var currentDetails: MediaDetails? = null
     private var modifiers = QueryModifiers()
 
-    private val headerMetaLabel = DesktopTheme.mutedLabel(strings.discover.loadingDetails)
+    private val headerMetaLabel = DesktopTheme.mutedLabel(strings.statusProcessing)
     private val posterLabel = JLabel("", SwingConstants.CENTER).apply {
         preferredSize = Dimension(140, 200)
         minimumSize = Dimension(140, 200)
@@ -79,6 +76,7 @@ class DesktopMediaDetailsDialog(
         foreground = DesktopTheme.palette.textPrimary
         font = DesktopTheme.pickBestUiFont(language, 13)
     }
+    private val secondaryOverviewLabel = DesktopTheme.mutedLabel("")
     private val extraInfoLabel = DesktopTheme.mutedLabel("")
     private val providersLabel = DesktopTheme.mutedLabel("")
     private val seasonsPanel = JPanel().apply {
@@ -90,13 +88,13 @@ class DesktopMediaDetailsDialog(
         layout = BoxLayout(this, BoxLayout.Y_AXIS)
         isOpaque = false
     }
-    private val customQueryField = DesktopTheme.styledField(strings.discover.customQueryPlaceholder)
-    private val favButton = DesktopTheme.secondaryButton(
-        if (isFavorite) strings.discover.removeFavorite else strings.discover.addFavorite
-    )
+    private val customQueryField = DesktopTheme.styledField(strings.discover.sourcesCustomQueryLabel)
+    private val favButton = DesktopTheme.secondaryButton(favButtonText())
+
+    private fun favButtonText(): String = if (isFavorite) "★ ${strings.discover.favoritesTitle}" else "☆ ${strings.discover.favoritesTitle}"
 
     init {
-        setSize(880, 680)
+        setSize(900, 700)
         setLocationRelativeTo(owner)
         contentPane.background = DesktopTheme.palette.bg
         layout = BorderLayout(12, 12)
@@ -132,13 +130,15 @@ class DesktopMediaDetailsDialog(
         }
         val titleLbl = JLabel(titleText).apply {
             foreground = DesktopTheme.palette.textPrimary
-            font = font.deriveFont(java.awt.Font.BOLD, 19f)
+            font = font.deriveFont(Font.BOLD, 19f)
         }
         rightCol.add(titleLbl)
         rightCol.add(Box.createVerticalStrut(4))
         rightCol.add(headerMetaLabel)
         rightCol.add(Box.createVerticalStrut(8))
         rightCol.add(overviewArea)
+        rightCol.add(Box.createVerticalStrut(4))
+        rightCol.add(secondaryOverviewLabel)
         rightCol.add(Box.createVerticalStrut(6))
         rightCol.add(extraInfoLabel)
         rightCol.add(Box.createVerticalStrut(4))
@@ -146,15 +146,15 @@ class DesktopMediaDetailsDialog(
         rightCol.add(Box.createVerticalStrut(10))
 
         val actionsRow = JPanel(FlowLayout(FlowLayout.LEADING, 8, 4)).apply { isOpaque = false }
-        val findSourcesBtn = DesktopTheme.primaryButton(strings.discover.findDownloadSources).apply {
+        val findSourcesBtn = DesktopTheme.primaryButton(strings.discover.detailsSearchSources).apply {
             addActionListener { runSourceDiscovery() }
         }
         favButton.addActionListener {
             isFavorite = !isFavorite
-            favButton.text = if (isFavorite) strings.discover.removeFavorite else strings.discover.addFavorite
+            favButton.text = favButtonText()
             onToggleFavorite(summary)
         }
-        val closeBtn = DesktopTheme.secondaryButton(strings.actionClose).apply {
+        val closeBtn = DesktopTheme.secondaryButton(strings.ui.unifiedDismissResult).apply {
             addActionListener { dispose() }
         }
         actionsRow.add(findSourcesBtn)
@@ -190,32 +190,32 @@ class DesktopMediaDetailsDialog(
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
         }
-        topPanel.add(DesktopTheme.sectionTitle(strings.discover.sourcesHeader))
+        topPanel.add(DesktopTheme.sectionTitle(strings.discover.sourcesScreenTitle))
         topPanel.add(Box.createVerticalStrut(6))
 
         val modifiersRow = JPanel(FlowLayout(FlowLayout.LEADING, 10, 4)).apply { isOpaque = false }
-        val cbDl = JCheckBox("download", modifiers.includeDownload).apply {
+        val cbDl = JCheckBox(strings.discover.sourcesModDownload, modifiers.includeDownload).apply {
             isOpaque = false
             foreground = DesktopTheme.palette.textPrimary
             addActionListener { modifiers = modifiers.copy(includeDownload = isSelected) }
         }
-        val cb1080 = JCheckBox("1080p", modifiers.include1080p).apply {
+        val cbOnline = JCheckBox(strings.discover.sourcesModOnline, modifiers.includeWatchOnline).apply {
             isOpaque = false
             foreground = DesktopTheme.palette.textPrimary
-            addActionListener { modifiers = modifiers.copy(include1080p = isSelected) }
+            addActionListener { modifiers = modifiers.copy(includeWatchOnline = isSelected) }
         }
-        val cbSub = JCheckBox(strings.discover.modifierSubFa, modifiers.includePersianSub).apply {
+        val cbSub = JCheckBox(strings.discover.sourcesModSubtitle, modifiers.includeSubtitle).apply {
             isOpaque = false
             foreground = DesktopTheme.palette.textPrimary
-            addActionListener { modifiers = modifiers.copy(includePersianSub = isSelected) }
+            addActionListener { modifiers = modifiers.copy(includeSubtitle = isSelected) }
         }
-        val cbDub = JCheckBox(strings.discover.modifierDubFa, modifiers.includePersianDub).apply {
+        val cbDub = JCheckBox(strings.discover.sourcesModDubbed, modifiers.includeDubbed).apply {
             isOpaque = false
             foreground = DesktopTheme.palette.textPrimary
-            addActionListener { modifiers = modifiers.copy(includePersianDub = isSelected) }
+            addActionListener { modifiers = modifiers.copy(includeDubbed = isSelected) }
         }
         modifiersRow.add(cbDl)
-        modifiersRow.add(cb1080)
+        modifiersRow.add(cbOnline)
         modifiersRow.add(cbSub)
         modifiersRow.add(cbDub)
         topPanel.add(modifiersRow)
@@ -223,7 +223,7 @@ class DesktopMediaDetailsDialog(
 
         val queryRow = JPanel(BorderLayout(8, 0)).apply { isOpaque = false }
         queryRow.add(customQueryField, BorderLayout.CENTER)
-        val searchSourcesBtn = DesktopTheme.primaryButton(strings.discover.searchButton).apply {
+        val searchSourcesBtn = DesktopTheme.primaryButton(strings.discover.sourcesRunSearch).apply {
             addActionListener { runSourceDiscovery() }
         }
         queryRow.add(searchSourcesBtn, BorderLayout.LINE_END)
@@ -243,7 +243,7 @@ class DesktopMediaDetailsDialog(
                 posterLabel.icon = icon
                 posterLabel.text = ""
             } else {
-                posterLabel.text = if (summary.mediaType == MediaType.TV) "TV" else "MOVIE"
+                posterLabel.text = if (summary.mediaType == MediaType.TV) strings.discover.badgeTvShow else strings.discover.badgeMovie
                 posterLabel.foreground = DesktopTheme.palette.textSecondary
             }
         }
@@ -251,41 +251,51 @@ class DesktopMediaDetailsDialog(
 
     private fun loadDetailsAsync() {
         uiScope.launch {
-            val details = runCatching { metadataRepo.getMediaDetails(summary, preferences) }.getOrNull()
+            val details = runCatching { metadataRepo.getMediaDetails(summary, preferences).getOrNull() }.getOrNull()
             currentDetails = details
             if (details == null) {
                 headerMetaLabel.text = listOfNotNull(
                     summary.releaseYear?.toString(),
-                    summary.rating?.let { "★ %.1f".format(it) },
-                    summary.mediaType.name,
+                    summary.imdbRating?.let { "★ %.1f".format(it) },
+                    if (summary.mediaType == MediaType.TV) strings.discover.badgeTvShow else strings.discover.badgeMovie,
                 ).joinToString("  •  ")
-                overviewArea.text = summary.overview ?: strings.discover.noOverview
+                overviewArea.text = summary.persianOverview?.takeIf { language == AppLanguage.FA && it.isNotBlank() }
+                    ?: summary.overview?.takeIf { it.isNotBlank() }
+                    ?: summary.persianOverview
+                    ?: ""
+                runSourceDiscovery()
                 return@launch
             }
 
             val metaParts = buildList {
-                add(if (details.summary.mediaType == MediaType.TV) strings.discover.typeTv else strings.discover.typeMovie)
-                details.summary.releaseYear?.let { add(it.toString()) }
-                details.runtimeMinutes?.let { add("${it} min") }
-                details.summary.rating?.let { add("★ %.1f".format(it)) }
+                add(if (details.mediaType == MediaType.TV) strings.discover.badgeTvShow else strings.discover.badgeMovie)
+                details.releaseYear?.let { add(it.toString()) }
+                details.runtimeMinutes?.let { add(strings.discover.labelRuntimeMinutes(it)) }
+                details.imdbRating?.let { add("★ %.1f".format(it)) }
                 if (details.genres.isNotEmpty()) add(details.genres.take(4).joinToString(", "))
             }
             headerMetaLabel.text = metaParts.joinToString("  •  ")
 
-            val synopsis = details.persianOverview?.takeIf { language == AppLanguage.FA && it.isNotBlank() }
-                ?: details.overview?.takeIf { it.isNotBlank() }
-                ?: details.persianOverview
-                ?: strings.discover.noOverview
-            overviewArea.text = synopsis
+            val faOverview = details.persianOverview?.takeIf { it.isNotBlank() }
+            val enOverview = details.overview?.takeIf { it.isNotBlank() }
+            if (language == AppLanguage.FA) {
+                overviewArea.text = faOverview ?: enOverview ?: ""
+                secondaryOverviewLabel.text = if (faOverview != null && enOverview != null) {
+                    "<html><body style='width:600px'><b>${strings.discover.detailsEnglishOverview}:</b> ${enOverview.take(260)}</body></html>"
+                } else ""
+            } else {
+                overviewArea.text = enOverview ?: faOverview ?: ""
+                secondaryOverviewLabel.text = if (enOverview != null && faOverview != null) {
+                    "<html><body style='width:600px'><b>${strings.discover.detailsPersianOverview}:</b> ${faOverview.take(260)}</body></html>"
+                } else ""
+            }
 
             val castNames = details.cast.take(6).joinToString(", ") { it.name }
-            extraInfoLabel.text = if (castNames.isNotBlank()) "Cast: $castNames" else ""
+            extraInfoLabel.text = if (castNames.isNotBlank()) "${strings.discover.labelCast}: $castNames" else ""
 
-            val wp = details.watchProviders
-            if (wp != null && wp.hasAny) {
-                val names = (wp.flatrate + wp.free + wp.ads + wp.rent + wp.buy)
-                    .map { it.name }.distinct().take(6).joinToString(", ")
-                providersLabel.text = "${strings.discover.watchOnLabel} (${wp.regionCode}): $names"
+            if (details.watchProviders.isNotEmpty()) {
+                val names = details.watchProviders.map { it.name }.distinct().take(6).joinToString(", ")
+                providersLabel.text = "${strings.discover.whereToWatchTitle}: $names"
             }
 
             renderSeasons(details)
@@ -295,13 +305,13 @@ class DesktopMediaDetailsDialog(
 
     private fun renderSeasons(details: MediaDetails) {
         seasonsPanel.removeAll()
-        if (details.summary.mediaType == MediaType.TV && details.seasons.isNotEmpty()) {
+        if (details.mediaType == MediaType.TV && details.seasons.isNotEmpty()) {
             val card = DesktopTheme.styledCard(elevated = false)
             card.layout = BorderLayout(8, 8)
             card.add(DesktopTheme.sectionTitle(strings.discover.labelSeasonsCount(details.seasons.size)), BorderLayout.NORTH)
             val rows = JPanel(FlowLayout(FlowLayout.LEADING, 8, 6)).apply { isOpaque = false }
             details.seasons.take(12).forEach { season ->
-                val btn = DesktopTheme.chipButton("S${season.seasonNumber} (${season.episodeCount} ep)").apply {
+                val btn = DesktopTheme.chipButton(strings.discover.detailsSearchSeason(season.seasonNumber) + " (${season.episodeCount})").apply {
                     addActionListener {
                         runSourceDiscovery(seasonNumber = season.seasonNumber)
                     }
@@ -316,17 +326,17 @@ class DesktopMediaDetailsDialog(
     }
 
     private fun runSourceDiscovery(seasonNumber: Int? = null) {
+        val details = currentDetails
         val target = SourceSearchTarget(
-            title = currentDetails?.summary?.title ?: summary.title,
-            originalTitle = currentDetails?.summary?.originalTitle ?: summary.originalTitle,
-            persianTitle = currentDetails?.summary?.persianTitle ?: summary.persianTitle,
-            releaseYear = currentDetails?.summary?.releaseYear ?: summary.releaseYear,
-            imdbId = currentDetails?.imdbId ?: summary.imdbId,
+            mediaId = summary.id,
             mediaType = summary.mediaType,
+            title = details?.title ?: summary.title,
+            persianTitle = details?.persianTitle ?: summary.persianTitle,
+            releaseYear = details?.releaseYear ?: summary.releaseYear,
             seasonNumber = seasonNumber,
         )
         val customQuery = customQueryField.text.trim().takeIf { it.isNotEmpty() }
-        sourcesStatusLabel.text = strings.discover.searchingSources
+        sourcesStatusLabel.text = strings.statusProcessing
         sourcesListPanel.removeAll()
         sourcesListPanel.revalidate()
         sourcesListPanel.repaint()
@@ -343,7 +353,7 @@ class DesktopMediaDetailsDialog(
             }.getOrNull()
 
             if (bundle == null) {
-                sourcesStatusLabel.text = strings.discover.noSourcesFound
+                sourcesStatusLabel.text = strings.discover.sourcesEmptySiteNotice
                 return@launch
             }
             renderSourceBundle(bundle)
@@ -354,17 +364,16 @@ class DesktopMediaDetailsDialog(
         sourcesListPanel.removeAll()
         val combined = (bundle.siteResults + bundle.webSearchResults).distinctBy { it.url }
         sourcesStatusLabel.text = buildString {
-            append("${combined.size} links found")
+            append("${combined.size} ${strings.discover.sourcesWebResultsTitle}")
             if (bundle.siteNotices.isNotEmpty()) {
                 append("  •  ").append(bundle.siteNotices.take(2).joinToString(" | "))
             }
         }
 
-        // Web search launch buttons
         val enginesBar = JPanel(FlowLayout(FlowLayout.LEADING, 6, 4)).apply { isOpaque = false }
         bundle.searchEngineLaunchUrls.forEach { (engine, url) ->
             enginesBar.add(
-                DesktopTheme.chipButton("${engine.label} ↗").apply {
+                DesktopTheme.chipButton("${engine.displayName} ↗").apply {
                     addActionListener { DesktopPlatformBridge.openInDefaultBrowser(url) }
                 }
             )
@@ -373,7 +382,7 @@ class DesktopMediaDetailsDialog(
         sourcesListPanel.add(Box.createVerticalStrut(6))
 
         if (combined.isEmpty()) {
-            sourcesListPanel.add(DesktopTheme.mutedLabel(strings.discover.noSourcesFound))
+            sourcesListPanel.add(DesktopTheme.mutedLabel(strings.discover.sourcesEmptySiteNotice))
         } else {
             combined.take(35).forEach { result ->
                 sourcesListPanel.add(buildSourceResultRow(result))
@@ -397,7 +406,7 @@ class DesktopMediaDetailsDialog(
 
         val titleLbl = JLabel(result.title.take(90)).apply {
             foreground = DesktopTheme.palette.textPrimary
-            font = font.deriveFont(java.awt.Font.BOLD, 13f)
+            font = font.deriveFont(Font.BOLD, 13f)
         }
         row.add(titleLbl, gbc)
 
@@ -408,7 +417,7 @@ class DesktopMediaDetailsDialog(
         row.add(statusText, gbc)
 
         val actionsPanel = JPanel(FlowLayout(FlowLayout.TRAILING, 6, 0)).apply { isOpaque = false }
-        val verifyBtn = DesktopTheme.secondaryButton(strings.discover.verifyLink)
+        val verifyBtn = DesktopTheme.secondaryButton(strings.discover.actionCheckLink)
         verifyBtn.addActionListener {
             verifyBtn.isEnabled = false
             uiScope.launch {
@@ -422,18 +431,18 @@ class DesktopMediaDetailsDialog(
                 verifyBtn.isEnabled = true
             }
         }
-        val openBtn = DesktopTheme.secondaryButton(strings.discover.openInBrowser).apply {
+        val openBtn = DesktopTheme.secondaryButton(strings.discover.actionOpenExternalBrowser).apply {
             addActionListener { DesktopPlatformBridge.openInDefaultBrowser(result.url) }
         }
         val resolveOrDlBtn = if (result.isDirectDownloadCandidate) {
-            DesktopTheme.primaryButton(strings.actionDownloadNow).apply {
+            DesktopTheme.primaryButton(strings.actionDownloadHere).apply {
                 addActionListener {
                     onEnqueueDirectUrl(result.url, result.title)
                     dispose()
                 }
             }
         } else {
-            DesktopTheme.primaryButton(strings.unifiedActionResolve).apply {
+            DesktopTheme.primaryButton(strings.ui.unifiedActionResolve).apply {
                 addActionListener {
                     onSendUrlToResolver(result.url)
                     dispose()
